@@ -32,7 +32,7 @@ namespace GraphQL.Language.AST
         {
             get
             {
-                var list = new List<object>(ValuesList.Count);
+                var list = new List<object?>(ValuesList.Count);
                 foreach (var item in ValuesList)
                     list.Add(item.Value);
                 return list;

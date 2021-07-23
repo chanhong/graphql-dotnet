@@ -26,9 +26,9 @@ namespace GraphQL.Validation.Rules
         {
             var type = varDef.Type.NamedGraphTypeFromType(context.Schema);
 
-            if (!type.IsInputType())
+            if (type == null || !type.IsInputType())
             {
-                context.ReportError(new VariablesAreInputTypesError(context, varDef, varDef.Type.GraphTypeFromType(context.Schema)));
+                context.ReportError(new VariablesAreInputTypesError(context, varDef, varDef.Type.GraphTypeFromType(context.Schema)!));
             }
         }).ToTask();
     }

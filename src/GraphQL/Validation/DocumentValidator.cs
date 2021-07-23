@@ -16,17 +16,17 @@ namespace GraphQL.Validation
         Task<(IValidationResult validationResult, Variables variables)> ValidateAsync(
             ISchema schema,
             Document document,
-            VariableDefinitions variableDefinitions,
-            IEnumerable<IValidationRule> rules = null,
-            IDictionary<string, object> userContext = null,
-            Inputs inputs = null);
+            VariableDefinitions? variableDefinitions,
+            IEnumerable<IValidationRule>? rules = null,
+            IDictionary<string, object?> userContext = null!,
+            Inputs? inputs = null);
     }
 
     /// <inheritdoc/>
     public class DocumentValidator : IDocumentValidator
     {
         // frequently reused objects
-        private ValidationContext _reusableValidationContext;
+        private ValidationContext? _reusableValidationContext;
 
         /// <summary>
         /// Returns the default set of validation rules: all except <see cref="OverlappingFieldsCanBeMerged"/>.
@@ -64,10 +64,10 @@ namespace GraphQL.Validation
         public async Task<(IValidationResult validationResult, Variables variables)> ValidateAsync(
             ISchema schema,
             Document document,
-            VariableDefinitions variableDefinitions,
-            IEnumerable<IValidationRule> rules = null,
-            IDictionary<string, object> userContext = null,
-            Inputs inputs = null)
+            VariableDefinitions? variableDefinitions,
+            IEnumerable<IValidationRule>? rules = null,
+            IDictionary<string, object?> userContext = null!,
+            Inputs? inputs = null)
         {
             schema.Initialize();
 
@@ -80,11 +80,10 @@ namespace GraphQL.Validation
 
             try
             {
-                Variables variables = null;
+                Variables? variables = null;
                 bool useOnlyStandardRules = rules == null;
 
-                if (useOnlyStandardRules)
-                    rules = CoreRules;
+                rules ??= CoreRules;
 
                 if (!rules.Any())
                 {
@@ -93,7 +92,7 @@ namespace GraphQL.Validation
                 else
                 {
                     List<INodeVisitor> visitors;
-                    List<IVariableVisitor> variableVisitors = null;
+                    List<IVariableVisitor>? variableVisitors = null;
 
                     if (useOnlyStandardRules) // standard rules don't validate variables
                     {

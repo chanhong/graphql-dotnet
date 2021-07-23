@@ -21,8 +21,8 @@ namespace GraphQL
     [AttributeUsage(AttributeTargets.Class | AttributeTargets.Method)]
     public sealed class GraphQLMetadataAttribute : GraphQLAttribute
     {
-        private Type _mappedToInput;
-        private Type _mappedToOutput;
+        private Type? _mappedToInput;
+        private Type? _mappedToOutput;
 
         public GraphQLMetadataAttribute()
         {
@@ -40,26 +40,26 @@ namespace GraphQL
         /// <summary>
         /// GraphType name.
         /// </summary>
-        public string Name { get; set; }
+        public string? Name { get; set; }
 
         /// <summary>
         /// GraphType description.
         /// </summary>
-        public string Description { get; set; }
+        public string? Description { get; set; }
 
         /// <summary>
         /// Deprecation reason of the field or GraphType.
         /// </summary>
-        public string DeprecationReason { get; set; }
+        public string? DeprecationReason { get; set; }
 
         public ResolverType ResolverType { get; set; }
 
-        public Type IsTypeOf { get; set; }
+        public Type? IsTypeOf { get; set; }
 
         /// <summary>
         /// Indicates which GraphType input type this CLR type is mapped to (if used in input context).
         /// </summary>
-        public Type InputType
+        public Type? InputType
         {
             get => _mappedToInput;
             set
@@ -74,7 +74,7 @@ namespace GraphQL
         /// <summary>
         /// Indicates which GraphType output type this CLR type is mapped to (if used in output context).
         /// </summary>
-        public Type OutputType
+        public Type? OutputType
         {
             get => _mappedToOutput;
             set

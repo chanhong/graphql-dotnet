@@ -9,8 +9,6 @@ using GraphQL.DataLoader;
 using GraphQL.Types;
 using GraphQL.Utilities;
 
-#nullable enable
-
 namespace GraphQL
 {
     /// <summary>
@@ -30,7 +28,7 @@ namespace GraphQL
             if (type == null)
                 return false;
 
-            return !type.IsAbstract && !type.IsInterface;
+            return !type.IsAbstract && !type.IsInterface; // && !type.IsGenericTypeDefinition; ??
         }
 
         /// <summary>
@@ -67,7 +65,7 @@ namespace GraphQL
 
             if (!string.IsNullOrEmpty(attr?.Name))
             {
-                return attr!.Name;
+                return attr!.Name!;
             }
 
             var typeName = type.Name;

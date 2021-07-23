@@ -10,7 +10,7 @@ namespace GraphQL.Types
         /// <summary>
         /// Gets or sets a delegate that determines if the specified object is valid for this graph type.
         /// </summary>
-        Func<object, bool> IsTypeOf { get; set; }
+        Func<object, bool>? IsTypeOf { get; set; }
 
         /// <summary>
         /// Adds an instance of <see cref="IInterfaceGraphType"/> to the list of interface instances supported by this object graph type.
@@ -25,7 +25,7 @@ namespace GraphQL.Types
     public class ObjectGraphType<TSourceType> : ComplexGraphType<TSourceType>, IObjectGraphType
     {
         /// <inheritdoc/>
-        public Func<object, bool> IsTypeOf { get; set; }
+        public Func<object, bool>? IsTypeOf { get; set; }
 
         /// <inheritdoc/>
         public ObjectGraphType()

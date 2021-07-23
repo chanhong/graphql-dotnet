@@ -13,7 +13,6 @@ namespace GraphQL.Language.AST
         /// </summary>
         public Field(NameNode alias, NameNode name)
         {
-            Alias = alias.Name;
             AliasNode = alias;
             NameNode = name;
         }
@@ -31,7 +30,12 @@ namespace GraphQL.Language.AST
         /// <summary>
         /// Returns the alias for this field, if any.
         /// </summary>
-        public string Alias { get; set; }
+        public string? Alias
+        {
+            get => AliasNode.Name;
+            [Obsolete]
+            set => throw new InvalidOperationException();
+        }
 
         /// <summary>
         /// Returns the <see cref="NameNode"/> containing the alias of this field, if any.
@@ -41,15 +45,15 @@ namespace GraphQL.Language.AST
         /// <summary>
         /// Gets or sets a list of directive nodes for this field selection node.
         /// </summary>
-        public Directives Directives { get; set; }
+        public Directives? Directives { get; set; }
 
         /// <summary>
         /// Gets or sets a list of argument nodes for this field selection node.
         /// </summary>
-        public Arguments Arguments { get; set; }
+        public Arguments? Arguments { get; set; }
 
         /// <inheritdoc/>
-        public SelectionSet SelectionSet { get; set; }
+        public SelectionSet? SelectionSet { get; set; }
 
         /// <summary>
         /// Returns the argument nodes, directive nodes, and child fields selection nodes contained within this field selection node.
@@ -59,28 +63,25 @@ namespace GraphQL.Language.AST
             get
             {
                 if (Arguments != null)
-                {
                     yield return Arguments;
-                }
 
                 if (Directives != null)
-                {
                     yield return Directives;
-                }
 
                 if (SelectionSet != null)
-                {
                     yield return SelectionSet;
-                }
             }
         }
 
         /// <inheritdoc/>
         public override void Visit<TState>(Action<INode, TState> action, TState state)
         {
-            action(Arguments, state);
-            action(Directives, state);
-            action(SelectionSet, state);
+            if (Arguments != null)
+                action(Arguments, state);
+            if (Directives != null)
+                action(Directives, state);
+            if (SelectionSet != null)
+                action(SelectionSet, state);
         }
 
         /// <inheritdoc />

@@ -20,6 +20,6 @@ namespace GraphQL.Execution
         /// <summary>
         /// Returns the children fields for a specified node.
         /// </summary>
-        Dictionary<string, Field> GetSubFields(ExecutionContext executionContext, ExecutionNode executionNode);
+        Dictionary<string, Field>? GetSubFields(ExecutionContext executionContext, ExecutionNode executionNode);
     }
 }

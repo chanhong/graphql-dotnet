@@ -10,9 +10,9 @@ namespace GraphQL.Types
     /// </summary>
     public class AppliedDirective : IEnumerable<DirectiveArgument>
     {
-        private string _name;
+        private string _name = null!;
 
-        internal List<DirectiveArgument> List { get; private set; }
+        internal List<DirectiveArgument>? List { get; private set; }
 
         /// <summary>
         /// Creates directive.
@@ -58,7 +58,7 @@ namespace GraphQL.Types
         /// Searches the directive arguments for an argument specified by its name and returns it.
         /// </summary>
         /// <param name="argumentName">Argument name.</param>
-        public DirectiveArgument FindArgument(string argumentName)
+        public DirectiveArgument? FindArgument(string argumentName)
         {
             if (List != null)
             {

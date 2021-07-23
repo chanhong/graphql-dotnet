@@ -8,6 +8,6 @@ namespace GraphQL.Language.AST
         /// <summary>
         /// Gets or sets a list of directive nodes for this node.
         /// </summary>
-        public Directives Directives { get; set; }
+        public Directives? Directives { get; set; }
     }
 }

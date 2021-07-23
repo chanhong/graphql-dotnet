@@ -5,7 +5,7 @@ namespace GraphQL.Language.AST
     /// </summary>
     public class NullValue : AbstractNode, IValue
     {
-        object IValue.Value => null;
+        object? IValue.Value => null;
 
         /// <inheritdoc/>
         public override string ToString() => "null";

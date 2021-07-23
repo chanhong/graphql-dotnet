@@ -38,7 +38,7 @@ namespace GraphQL.Utilities
         /// </summary>
         /// <param name="schema">Schema to print.</param>
         /// <param name="options">Printer options.</param>
-        public SchemaPrinter(ISchema schema, SchemaPrinterOptions options = null)
+        public SchemaPrinter(ISchema schema, SchemaPrinterOptions? options = null)
         {
             Schema = schema;
             Options = options ?? new SchemaPrinterOptions();
@@ -110,7 +110,7 @@ namespace GraphQL.Utilities
         /// </summary>
         protected virtual bool IsDefinedType(string typeName) => !IsIntrospectionType(typeName) && !IsBuiltInScalar(typeName);
 
-        public string PrintSchemaDefinition(ISchema schema)
+        public string? PrintSchemaDefinition(ISchema schema)
         {
             if (IsSchemaOfCommonNames(Schema))
                 return null;
@@ -248,7 +248,7 @@ namespace GraphQL.Utilities
 
         public string PrintInputValue(FieldType field)
         {
-            var argumentType = field.ResolvedType;
+            var argumentType = field.ResolvedType!;
             var description = $"{FormatDescription(field.Description, "  ")}  {field.Name}: {argumentType}";
 
             if (field.DefaultValue != null)
@@ -261,7 +261,7 @@ namespace GraphQL.Utilities
 
         public string PrintInputValue(QueryArgument argument)
         {
-            var argumentType = argument.ResolvedType;
+            var argumentType = argument.ResolvedType!;
             var desc = "{0}: {1}".ToFormat(argument.Name, argumentType);
 
             if (argument.DefaultValue != null)
@@ -292,7 +292,7 @@ namespace GraphQL.Utilities
             return builder.ToString().TrimStart();
         }
 
-        private string FormatDirectiveArguments(QueryArguments arguments)
+        private string? FormatDirectiveArguments(QueryArguments arguments)
         {
             if (arguments == null || arguments.Count == 0)
                 return null;
@@ -304,17 +304,31 @@ namespace GraphQL.Utilities
             return string.Join(" | ", locations.Select(x => __DirectiveLocation.Instance.Serialize(x))); //TODO: remove allocations
         }
 
-        protected string FormatDescription(string description, string indentation = "") => Options.IncludeDescriptions ? PrintDescription(description, indentation) : "";
+        protected string FormatDescription(string? description, string indentation = "")
+        {
+            if (Options.IncludeDescriptions)
+            {
+                if (Options.PrintDescriptionsAsComments)
+                {
+                    return PrintComment(description, indentation);
+                }
+                else
+                {
+                    return PrintDescription(description, indentation);
+                }
+            }
+            return "";
+        }
 
         public string FormatDefaultValue(object value, IGraphType graphType)
         {
             return graphType switch
             {
-                NonNullGraphType nonNull => FormatDefaultValue(value, nonNull.ResolvedType),
-                ListGraphType list => "[{0}]".ToFormat(string.Join(", ", ((IEnumerable<object>)value).Select(i => FormatDefaultValue(i, list.ResolvedType)))),
+                NonNullGraphType nonNull => FormatDefaultValue(value, nonNull.ResolvedType!),
+                ListGraphType list => "[{0}]".ToFormat(string.Join(", ", ((IEnumerable<object>)value).Select(i => FormatDefaultValue(i, list.ResolvedType!)))),
                 IInputObjectGraphType input => FormatInputObjectValue(value, input),
-                EnumerationGraphType enumeration => (enumeration.Serialize(value) ?? throw new ArgumentOutOfRangeException(nameof(value), $"Unknown value '{value}' for enumeration '{enumeration.Name}'")).ToString(),
-                ScalarGraphType scalar => AstPrinter.Print(scalar.ToAST(value)),
+                EnumerationGraphType enumeration => AstPrinter.Print(enumeration.ToAST(value) ?? throw new ArgumentOutOfRangeException(nameof(value), $"Unable to convert '{value}' to AST for enumeration type '{enumeration.Name}'.")),
+                ScalarGraphType scalar => AstPrinter.Print(scalar.ToAST(value) ?? throw new ArgumentOutOfRangeException(nameof(value), $"Unable to convert '{value}' to AST for scalar type '{scalar.Name}'.")),
                 _ => throw new NotSupportedException($"Unsupported graph type '{graphType}'")
             };
         }
@@ -343,7 +357,7 @@ namespace GraphQL.Utilities
                 {
                     sb.Append(field.Name)
                        .Append(": ")
-                       .Append(FormatDefaultValue(propertyValue, field.ResolvedType))
+                       .Append(FormatDefaultValue(propertyValue, field.ResolvedType!))
                        .Append(", ");
                 }
             }
@@ -353,17 +367,17 @@ namespace GraphQL.Utilities
             return sb.ToString();
         }
 
-        public string PrintDescription(string description, string indentation = "", bool firstInBlock = true)
+        public virtual string PrintComment(string? comment, string indentation = "", bool firstInBlock = true)
         {
-            if (string.IsNullOrWhiteSpace(description))
+            if (string.IsNullOrWhiteSpace(comment))
                 return "";
 
             indentation ??= "";
 
             // normalize newlines
-            description = description.Replace("\r", "");
+            comment = comment!.Replace("\r", "");
 
-            var lines = description.Split('\n');
+            var lines = comment.Split('\n');
 
             var desc = !string.IsNullOrWhiteSpace(indentation) && !firstInBlock ? Environment.NewLine : "";
 
@@ -386,13 +400,55 @@ namespace GraphQL.Utilities
             return desc;
         }
 
-        public string PrintDeprecation(string reason)
+        public string PrintDescription(string? description, string indentation = "", bool firstInBlock = true)
+        {
+            if (string.IsNullOrWhiteSpace(description))
+                return "";
+
+            indentation ??= "";
+
+            // escape """ with \"""
+            description = description!.Replace("\"\"\"", "\\\"\"\"");
+
+            // normalize newlines
+            description = description.Replace("\r", "");
+
+            // remove control characters besides newline and tab
+            if (description.Any(c => c < ' ' && c != '\t' & c != '\n'))
+            {
+                description = new string(description.Where(c => c >= ' ' || c == '\t' || c == '\n').ToArray());
+            }
+
+            var lines = description.Split('\n');
+
+            var desc = !string.IsNullOrWhiteSpace(indentation) && !firstInBlock ? Environment.NewLine : "";
+
+            desc += indentation + "\"\"\"\n";
+
+            foreach (var line in lines)
+            {
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    desc += Environment.NewLine;
+                }
+                else
+                {
+                    desc += indentation + line + Environment.NewLine;
+                }
+            }
+
+            desc += indentation + "\"\"\"\n";
+
+            return desc;
+        }
+
+        public string PrintDeprecation(string? reason)
         {
             if (string.IsNullOrWhiteSpace(reason))
             {
                 return string.Empty;
             }
-            return $" @deprecated(reason: {AstPrinter.Print(new StringValue(reason))})";
+            return $" @deprecated(reason: {AstPrinter.Print(new StringValue(reason!))})";
         }
 
         public string[] BreakLine(string line, int len)

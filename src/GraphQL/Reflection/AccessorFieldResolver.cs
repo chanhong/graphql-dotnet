@@ -14,7 +14,7 @@ namespace GraphQL.Reflection
             _serviceProvider = serviceProvider;
         }
 
-        public object Resolve(IResolveFieldContext context)
+        public object? Resolve(IResolveFieldContext context)
         {
             var arguments = ReflectionHelper.BuildArguments(_accessor.Parameters, context);
 

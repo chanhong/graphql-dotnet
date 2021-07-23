@@ -22,9 +22,9 @@ namespace GraphQL.Types
             this IObjectGraphType obj,
             string name,
             IGraphType type,
-            string description = null,
-            QueryArguments arguments = null,
-            Func<IResolveFieldContext, object> resolve = null)
+            string? description = null,
+            QueryArguments? arguments = null,
+            Func<IResolveFieldContext, object?>? resolve = null)
         {
             var field = new FieldType
             {
@@ -50,9 +50,9 @@ namespace GraphQL.Types
             this IObjectGraphType obj,
             string name,
             IGraphType type,
-            string description = null,
-            QueryArguments arguments = null,
-            Func<IResolveFieldContext, Task<object>> resolve = null)
+            string? description = null,
+            QueryArguments? arguments = null,
+            Func<IResolveFieldContext, Task<object?>>? resolve = null)
         {
             var field = new FieldType
             {

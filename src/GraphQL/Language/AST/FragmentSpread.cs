@@ -29,13 +29,24 @@ namespace GraphQL.Language.AST
         /// <summary>
         /// Gets or sets a list of directive nodes that apply to this fragment spread node.
         /// </summary>
-        public Directives Directives { get; set; }
+        public Directives? Directives { get; set; }
 
         /// <inheritdoc/>
-        public override IEnumerable<INode> Children => Directives;
+        public override IEnumerable<INode> Children
+        {
+            get
+            {
+                if (Directives != null)
+                    yield return Directives;
+            }
+        }
 
         /// <inheritdoc/>
-        public override void Visit<TState>(Action<INode, TState> action, TState state) => action(Directives, state);
+        public override void Visit<TState>(Action<INode, TState> action, TState state)
+        {
+            if (Directives != null)
+                action(Directives, state);
+        }
 
         /// <inheritdoc/>
         public override string ToString() => $"FragmentSpread{{name='{Name}', directives={Directives}}}";

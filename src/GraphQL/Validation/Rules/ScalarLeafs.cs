@@ -26,7 +26,7 @@ namespace GraphQL.Validation.Rules
             new MatchingNodeVisitor<Field>((f, context) => Field(context.TypeInfo.GetLastType(), f, context))
                 .ToTask();
 
-        private static void Field(IGraphType type, Field field, ValidationContext context)
+        private static void Field(IGraphType? type, Field field, ValidationContext context)
         {
             if (type == null)
             {

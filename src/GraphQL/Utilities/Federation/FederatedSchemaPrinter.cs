@@ -25,7 +25,7 @@ namespace GraphQL.Utilities.Federation
             "_Any"
         };
 
-        public FederatedSchemaPrinter(ISchema schema, SchemaPrinterOptions options = null)
+        public FederatedSchemaPrinter(ISchema schema, SchemaPrinterOptions? options = null)
             : base(schema, options)
         {
         }
@@ -41,7 +41,7 @@ namespace GraphQL.Utilities.Federation
             var dirs = string.Join(
                 " ",
                 astDirectives
-                    .Where(x => IsFederatedDirective((string)x.Name.Value))
+                    .Where(x => IsFederatedDirective((string)x.Name!.Value))
                     .Select(PrintAstDirective)
             );
 
@@ -52,9 +52,13 @@ namespace GraphQL.Utilities.Federation
 
         public override string PrintObject(IObjectGraphType type)
         {
-            var isExtension = type.IsExtensionType();
+            // Do not return an empty query type: "Query { }" as it is not valid as part of the sdl.
+            if (type != null && string.Equals(type.Name, "Query", StringComparison.Ordinal) && !type.Fields.Any(x => !IsFederatedType(x.ResolvedType!.GetNamedType().Name)))
+                return string.Empty;
 
-            var interfaces = type.ResolvedInterfaces.List.Select(x => x.Name).ToList();
+            var isExtension = type!.IsExtensionType();
+
+            var interfaces = type!.ResolvedInterfaces.List.Select(x => x.Name).ToList();
             var delimiter = " & ";
             var implementedInterfaces = interfaces.Count > 0
                 ? " implements {0}".ToFormat(string.Join(delimiter, interfaces))
@@ -78,7 +82,7 @@ namespace GraphQL.Utilities.Federation
         public override string PrintFields(IComplexGraphType type)
         {
             var fields = type?.Fields
-                .Where(x => !IsFederatedType(x.ResolvedType.GetNamedType().Name))
+                .Where(x => !IsFederatedType(x.ResolvedType!.GetNamedType().Name))
                 .Select(x =>
                 new
                 {

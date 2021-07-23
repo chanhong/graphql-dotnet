@@ -34,7 +34,7 @@ namespace GraphQL.Language.AST
         /// <inheritdoc/>
         public SourceLocation SourceLocation { get; }
 
-        IEnumerable<INode> INode.Children => null;
+        IEnumerable<INode>? INode.Children => null;
 
         /// <inheritdoc/>
         public void Visit<TState>(Action<INode, TState> action, TState state) { }

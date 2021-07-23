@@ -9,13 +9,13 @@ namespace GraphQL.Instrumentation
     public class InstrumentFieldsMiddleware : IFieldMiddleware
     {
         /// <inheritdoc/>
-        public async Task<object> Resolve(IResolveFieldContext context, FieldMiddlewareDelegate next)
+        public async Task<object?> Resolve(IResolveFieldContext context, FieldMiddlewareDelegate next)
         {
-            var metadata = new Dictionary<string, object>
+            var metadata = new Dictionary<string, object?>
             {
                 { "typeName", context.ParentType.Name },
                 { "fieldName", context.FieldAst.Name },
-                { "returnTypeName", context.FieldDefinition.ResolvedType.ToString() },
+                { "returnTypeName", context.FieldDefinition.ResolvedType!.ToString() },
                 { "path", context.Path },
             };
 

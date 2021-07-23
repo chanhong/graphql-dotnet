@@ -33,7 +33,7 @@ namespace GraphQL.Validation.Rules
             new MatchingNodeVisitor<InlineFragment>((f, context) => CheckDuplicates(context, f.Directives))
         ).ToTask();
 
-        private static void CheckDuplicates(ValidationContext context, Directives directives)
+        private static void CheckDuplicates(ValidationContext context, Directives? directives)
         {
             if (directives?.Count > 0)
             {

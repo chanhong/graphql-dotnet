@@ -86,7 +86,9 @@ namespace GraphQL.Types
         /// <summary>
         /// Initializes a new instance with no types registered.
         /// </summary>
+#pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider declaring as nullable.
         protected SchemaTypes()
+#pragma warning restore CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider declaring as nullable.
         {
         }
 
@@ -115,7 +117,7 @@ namespace GraphQL.Types
                (name, type, ctx) =>
                {
                    SetGraphType(name, type);
-                   ctx.AddType(name, type, null);
+                   ctx.AddType(name, type, null!);
                },
                typeMappings);
 
@@ -168,7 +170,7 @@ namespace GraphQL.Types
 
             Debug.Assert(ctx.InFlightRegisteredTypes.Count == 0);
 
-            _typeDictionary = null;
+            _typeDictionary = null!; // not needed once initialization is complete
         }
 
         private static IEnumerable<IGraphType> GetSchemaTypes(ISchema schema, IServiceProvider serviceProvider)
@@ -293,7 +295,7 @@ namespace GraphQL.Types
         /// <summary>
         /// Returns a graph type instance from the lookup table by its GraphQL type name.
         /// </summary>
-        public IGraphType this[string typeName]
+        public IGraphType? this[string typeName]
         {
             get
             {
@@ -310,7 +312,7 @@ namespace GraphQL.Types
         /// Returns a graph type instance from the lookup table by its .NET type.
         /// </summary>
         /// <param name="type">The .NET type of the graph type.</param>
-        private IGraphType FindGraphType(Type type) => _typeDictionary.TryGetValue(type, out var value) ? value : null;
+        private IGraphType? FindGraphType(Type type) => _typeDictionary.TryGetValue(type, out var value) ? value : null;
 
         private void AddType(IGraphType type, TypeCollectionContext context)
         {
@@ -394,12 +396,12 @@ namespace GraphQL.Types
                             "There is no way to resolve this possible type during execution.");
                     }
 
-                    union.AddPossibleType(objType);
+                    union.AddPossibleType(objType!);
                 }
             }
         }
 
-        private void HandleField(IComplexGraphType parentType, FieldType field, TypeCollectionContext context, bool applyNameConverter)
+        private void HandleField(IComplexGraphType? parentType, FieldType field, TypeCollectionContext context, bool applyNameConverter)
         {
             // applyNameConverter will be false while processing the three root introspection query fields: __schema, __type, and __typename
             //
@@ -414,7 +416,7 @@ namespace GraphQL.Types
 
             if (applyNameConverter)
             {
-                field.Name = _nameConverter.NameForField(field.Name, parentType);
+                field.Name = _nameConverter.NameForField(field.Name, parentType!);
                 NameValidator.ValidateNameOnSchemaInitialize(field.Name, NamedElement.Field);
             }
 
@@ -425,7 +427,7 @@ namespace GraphQL.Types
 
                 object typeOrError = RebuildType(field.Type, parentType is IInputObjectGraphType, context.TypeMappings);
                 if (typeOrError is string error)
-                    throw new InvalidOperationException($"The GraphQL type for field '{parentType.Name}.{field.Name}' could not be derived implicitly. " + error);
+                    throw new InvalidOperationException($"The GraphQL type for field '{parentType?.Name}.{field.Name}' could not be derived implicitly. " + error);
                 field.Type = (Type)typeOrError;
 
                 AddTypeIfNotRegistered(field.Type, context);
@@ -438,11 +440,11 @@ namespace GraphQL.Types
 
             if (field.Arguments?.Count > 0)
             {
-                foreach (var arg in field.Arguments.List)
+                foreach (var arg in field.Arguments.List!)
                 {
                     if (applyNameConverter)
                     {
-                        arg.Name = _nameConverter.NameForArgument(arg.Name, parentType, field);
+                        arg.Name = _nameConverter.NameForArgument(arg.Name, parentType!, field);
                         NameValidator.ValidateNameOnSchemaInitialize(arg.Name, NamedElement.Argument);
                     }
 
@@ -453,7 +455,7 @@ namespace GraphQL.Types
 
                         object typeOrError = RebuildType(arg.Type, true, context.TypeMappings);
                         if (typeOrError is string error)
-                            throw new InvalidOperationException($"The GraphQL type for argument '{parentType.Name}.{field.Name}.{arg.Name}' could not be derived implicitly. " + error);
+                            throw new InvalidOperationException($"The GraphQL type for argument '{parentType?.Name}.{field.Name}.{arg.Name}' could not be derived implicitly. " + error);
                         arg.Type = (Type)typeOrError;
 
                         AddTypeIfNotRegistered(arg.Type, context);
@@ -471,7 +473,7 @@ namespace GraphQL.Types
         {
             if (directive.Arguments?.Count > 0)
             {
-                foreach (var arg in directive.Arguments.List)
+                foreach (var arg in directive.Arguments.List!)
                 {
                     if (arg.ResolvedType == null)
                     {
@@ -544,7 +546,7 @@ Make sure that your ServiceProvider is configured correctly.");
         private void AddTypeIfNotRegistered(IGraphType type, TypeCollectionContext context)
         {
             var (namedType, namedType2) = type.GetNamedTypes();
-            namedType ??= context.ResolveType(namedType2);
+            namedType ??= context.ResolveType(namedType2!);
 
             var foundType = this[namedType.Name];
             if (foundType == null)
@@ -621,13 +623,13 @@ Make sure that your ServiceProvider is configured correctly.");
             {
                 foreach (var field in complexType.Fields)
                 {
-                    field.ResolvedType = ConvertTypeReference(type, field.ResolvedType);
+                    field.ResolvedType = ConvertTypeReference(type, field.ResolvedType!);
 
                     if (field.Arguments?.Count > 0)
                     {
-                        foreach (var arg in field.Arguments.List)
+                        foreach (var arg in field.Arguments.List!)
                         {
-                            arg.ResolvedType = ConvertTypeReference(type, arg.ResolvedType);
+                            arg.ResolvedType = ConvertTypeReference(type, arg.ResolvedType!);
                         }
                     }
                 }
@@ -669,7 +671,7 @@ Make sure that your ServiceProvider is configured correctly.");
                             "There is no way to resolve this possible type during execution.");
                     }
 
-                    list[i] = unionType;
+                    list[i] = unionType!;
                 }
             }
         }
@@ -678,31 +680,30 @@ Make sure that your ServiceProvider is configured correctly.");
         {
             if (type is NonNullGraphType nonNull)
             {
-                nonNull.ResolvedType = ConvertTypeReference(parentType, nonNull.ResolvedType);
+                nonNull.ResolvedType = ConvertTypeReference(parentType, nonNull.ResolvedType!);
                 return nonNull;
             }
 
             if (type is ListGraphType list)
             {
-                list.ResolvedType = ConvertTypeReference(parentType, list.ResolvedType);
+                list.ResolvedType = ConvertTypeReference(parentType, list.ResolvedType!);
                 return list;
             }
 
-            var reference = type as GraphQLTypeReference;
-            if (reference != null)
+            if (type is GraphQLTypeReference reference)
             {
-                type = this[reference.TypeName];
-                if (type == null)
+                var type2 = this[reference.TypeName];
+                if (type2 == null)
                 {
-                    type = _builtInScalars.Values.FirstOrDefault(t => t.Name == reference.TypeName) ?? _builtInCustomScalars.Values.FirstOrDefault(t => t.Name == reference.TypeName);
-                    if (type != null)
-                        SetGraphType(type.Name, type);
+                    type2 = _builtInScalars.Values.FirstOrDefault(t => t.Name == reference.TypeName) ?? _builtInCustomScalars.Values.FirstOrDefault(t => t.Name == reference.TypeName);
+                    if (type2 != null)
+                        SetGraphType(type2.Name, type2);
                 }
-            }
-
-            if (reference != null && type == null)
-            {
-                throw new InvalidOperationException($"Unable to resolve reference to type '{reference.TypeName}' on '{parentType.Name}'");
+                if (type2 == null)
+                {
+                    throw new InvalidOperationException($"Unable to resolve reference to type '{reference.TypeName}' on '{parentType.Name}'");
+                }
+                type = type2;
             }
 
             return type;
@@ -736,8 +737,7 @@ Make sure that your ServiceProvider is configured correctly.");
                 else
                 {
                     // Fatal schema configuration error.
-                    throw new InvalidOperationException($@"Unable to register GraphType '{type.FullName}' with the name '{typeName}'.
-The name '{typeName}' is already registered to '{existingGraphType.GetType().FullName}'. Check your schema configuration.");
+                    throw new InvalidOperationException($@"Unable to register GraphType '{type.FullName}' with the name '{typeName}'. The name '{typeName}' is already registered to '{existingGraphType.GetType().FullName}'. Check your schema configuration.");
                 }
             }
             else

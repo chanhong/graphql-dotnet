@@ -20,6 +20,6 @@ namespace GraphQL.Execution
         /// <summary>
         /// Returns <see langword="null"/>.
         /// </summary>
-        public override object ToValue() => null;
+        public override object? ToValue() => null;
     }
 }

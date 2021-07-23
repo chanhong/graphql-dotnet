@@ -19,7 +19,7 @@ namespace GraphQL.Validation.Rules
 
         /// <inheritdoc/>
         /// <exception cref="UniqueFragmentNamesError"/>
-        public Task<INodeVisitor> ValidateAsync(ValidationContext context) => context.Document.Fragments.Count > 1 ? _nodeVisitor : null;
+        public Task<INodeVisitor>? ValidateAsync(ValidationContext context) => context.Document.Fragments.Count > 1 ? _nodeVisitor : null;
 
         private static readonly Task<INodeVisitor> _nodeVisitor = new MatchingNodeVisitor<FragmentDefinition>((fragmentDefinition, context) =>
             {

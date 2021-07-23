@@ -20,7 +20,7 @@ namespace GraphQL.Language.AST
         /// <summary>
         /// Gets or sets the query before being parsed into an AST document.
         /// </summary>
-        public string OriginalQuery { get; set; }
+        public string? OriginalQuery { get; set; }
 
         /// <inheritdoc/>
         public override IEnumerable<INode> Children

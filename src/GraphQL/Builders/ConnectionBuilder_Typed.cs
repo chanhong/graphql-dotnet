@@ -6,8 +6,6 @@ using System.Threading.Tasks;
 using GraphQL.Types;
 using GraphQL.Types.Relay;
 
-#nullable enable
-
 namespace GraphQL.Builders
 {
     /// <summary>
@@ -15,7 +13,7 @@ namespace GraphQL.Builders
     /// </summary>
     public class ConnectionBuilder<TSourceType, TReturnType>
     {
-        private bool IsBidirectional => FieldType.Arguments.Find("before")?.Type == typeof(StringGraphType) && FieldType.Arguments.Find("last")?.Type == typeof(IntGraphType);
+        private bool IsBidirectional => FieldType.Arguments?.Find("before")?.Type == typeof(StringGraphType) && FieldType.Arguments.Find("last")?.Type == typeof(IntGraphType);
 
         private int? PageSizeFromMetadata
         {
@@ -145,7 +143,7 @@ namespace GraphQL.Builders
                 Name = name,
             };
             configure?.Invoke(arg);
-            FieldType.Arguments.Add(arg);
+            FieldType.Arguments!.Add(arg);
             return this;
         }
 
@@ -259,7 +257,7 @@ namespace GraphQL.Builders
         /// Sets the resolver method for the connection field. This method must be called after
         /// <see cref="PageSize(int?)"/> and/or <see cref="Bidirectional"/> have been called.
         /// </summary>
-        public virtual void ResolveAsync(Func<IResolveConnectionContext<TSourceType>, Task<TReturnType>> resolver)
+        public virtual void ResolveAsync(Func<IResolveConnectionContext<TSourceType>, Task<TReturnType?>> resolver)
         {
             var isUnidirectional = !IsBidirectional;
             var pageSize = PageSizeFromMetadata;

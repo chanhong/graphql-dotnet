@@ -53,7 +53,7 @@ namespace GraphQL.Validation.Rules
             ValidationContext context,
             Dictionary<SelectionSet, CachedField> cachedFieldsAndFragmentNames,
             PairSet comparedFragmentPairs,
-            IGraphType parentType,
+            IGraphType? parentType,
             SelectionSet selectionSet)
         {
             var conflicts = new List<Conflict>();
@@ -156,7 +156,7 @@ namespace GraphQL.Validation.Rules
             }
         }
 
-        private static Conflict FindConflict(
+        private static Conflict? FindConflict(
             ValidationContext context,
             Dictionary<SelectionSet, CachedField> cachedFieldsAndFragmentNames,
             PairSet comparedFragmentPairs,
@@ -263,9 +263,9 @@ namespace GraphQL.Validation.Rules
                     cachedFieldsAndFragmentNames,
                     comparedFragmentPairs,
                     areMutuallyExclusive,
-                    type1.GetNamedType(),
+                    type1?.GetNamedType(),
                     selectionSet1,
-                    type2.GetNamedType(),
+                    type2?.GetNamedType(),
                     selectionSet2);
 
                 return SubfieldConflicts(conflicts, responseName, node1, node2);
@@ -279,9 +279,9 @@ namespace GraphQL.Validation.Rules
             Dictionary<SelectionSet, CachedField> cachedFieldsAndFragmentNames,
             PairSet comparedFragmentPairs,
             bool areMutuallyExclusive,
-            IGraphType parentType1,
+            IGraphType? parentType1,
             SelectionSet selectionSet1,
-            IGraphType parentType2,
+            IGraphType? parentType2,
             SelectionSet selectionSet2)
         {
             var conflicts = new List<Conflict>();
@@ -483,7 +483,7 @@ namespace GraphQL.Validation.Rules
 
             comparedFragments[fragmentName] = true;
 
-            FragmentDefinition fragment = context.GetFragment(fragmentName);
+            FragmentDefinition? fragment = context.GetFragment(fragmentName);
 
             if (fragment == null)
             {
@@ -558,7 +558,7 @@ namespace GraphQL.Validation.Rules
                     {
                         for (var j = 0; j < fields2.Count; j++)
                         {
-                            Conflict conflict = FindConflict(
+                            Conflict? conflict = FindConflict(
                               context,
                               cachedFieldsAndFragmentNames,
                               comparedFragmentPairs,
@@ -581,7 +581,7 @@ namespace GraphQL.Validation.Rules
         {
             if (type1 is ListGraphType type1List)
             {
-                return type2 is ListGraphType type2List ? DoTypesConflict(type1List.ResolvedType, type2List.ResolvedType) : true;
+                return type2 is ListGraphType type2List ? DoTypesConflict(type1List.ResolvedType!, type2List.ResolvedType!) : true;
             }
 
             if (type2 is ListGraphType)
@@ -591,7 +591,7 @@ namespace GraphQL.Validation.Rules
 
             if (type1 is NonNullGraphType type1NonNull)
             {
-                return type2 is NonNullGraphType type2NonNull ? DoTypesConflict(type1NonNull.ResolvedType, type2NonNull.ResolvedType) : true;
+                return type2 is NonNullGraphType type2NonNull ? DoTypesConflict(type1NonNull.ResolvedType!, type2NonNull.ResolvedType!) : true;
             }
 
             if (type2 is NonNullGraphType)
@@ -630,13 +630,13 @@ namespace GraphQL.Validation.Rules
         {
             // normalize values prior to comparison by using AstPrinter.Print rather than INode.ToString(document)
             return arg1.Value == null && arg2.Value == null ||
-                AstPrinter.Print(arg1.Value) == AstPrinter.Print(arg2.Value);
+                arg1.Value != null && arg2.Value != null && AstPrinter.Print(arg1.Value) == AstPrinter.Print(arg2.Value);
         }
 
         private static CachedField GetFieldsAndFragmentNames(
             ValidationContext context,
             Dictionary<SelectionSet, CachedField> cachedFieldsAndFragmentNames,
-            IGraphType parentType,
+            IGraphType? parentType,
             SelectionSet selectionSet)
         {
             cachedFieldsAndFragmentNames.TryGetValue(selectionSet, out CachedField cached);
@@ -683,7 +683,7 @@ namespace GraphQL.Validation.Rules
 
         private static void CollectFieldsAndFragmentNames(
             ValidationContext context,
-            IGraphType parentType,
+            IGraphType? parentType,
             SelectionSet selectionSet,
             Dictionary<string, List<FieldDefPair>> nodeAndDefs,
             Dictionary<string, bool> fragments)
@@ -695,13 +695,13 @@ namespace GraphQL.Validation.Rules
                 if (selection is Field field)
                 {
                     var fieldName = field.Name;
-                    FieldType fieldDef = null;
+                    FieldType? fieldDef = null;
                     if (isObjectType(parentType) || isInterfaceType(parentType))
                     {
-                        fieldDef = (parentType as IComplexGraphType).GetField(fieldName);
+                        fieldDef = (parentType as IComplexGraphType)!.GetField(fieldName);
                     }
 
-                    var responseName = !string.IsNullOrWhiteSpace(field.Alias) ? field.Alias : fieldName;
+                    var responseName = !string.IsNullOrWhiteSpace(field.Alias) ? field.Alias! : fieldName;
 
                     if (!nodeAndDefs.ContainsKey(responseName))
                     {
@@ -741,24 +741,24 @@ namespace GraphQL.Validation.Rules
 
         private sealed class FieldDefPair
         {
-            public IGraphType ParentType { get; set; }
-            public ISelection Field { get; set; }
-            public FieldType FieldDef { get; set; }
+            public IGraphType? ParentType { get; set; } = null!;
+            public ISelection Field { get; set; } = null!;
+            public FieldType? FieldDef { get; set; }
         }
 
-        private static bool isInterfaceType(IGraphType parentType)
+        private static bool isInterfaceType(IGraphType? parentType)
         {
             return parentType is IInterfaceGraphType;
         }
 
-        private static bool isObjectType(IGraphType parentType)
+        private static bool isObjectType(IGraphType? parentType)
         {
             return parentType is IObjectGraphType;
         }
 
         // Given a series of Conflicts which occurred between two sub-fields,
         // generate a single Conflict.
-        private static Conflict SubfieldConflicts(
+        private static Conflict? SubfieldConflicts(
             List<Conflict> conflicts,
             string responseName,
             ISelection node1,
@@ -800,17 +800,17 @@ namespace GraphQL.Validation.Rules
             /// <summary>
             /// Returns the reason for the conflict.
             /// </summary>
-            public ConflictReason Reason { get; set; }
+            public ConflictReason Reason { get; set; } = null!;
 
             /// <summary>
             /// Returns a list of fields that are in conflict.
             /// </summary>
-            public List<ISelection> FieldsLeft { get; set; }
+            public List<ISelection> FieldsLeft { get; set; } = null!;
 
             /// <summary>
             /// Returns a list of fields that are in conflict.
             /// </summary>
-            public List<ISelection> FieldsRight { get; set; }
+            public List<ISelection> FieldsRight { get; set; } = null!;
         }
 
         /// <summary>
@@ -821,12 +821,12 @@ namespace GraphQL.Validation.Rules
             /// <summary>
             /// The name of the field in conflict.
             /// </summary>
-            public string Name { get; set; }
+            public string Name { get; set; } = null!;
 
             /// <summary>
             /// Returns a message descriptor describing the conflict.
             /// </summary>
-            public Message Message { get; set; }
+            public Message Message { get; set; } = null!;
         }
 
         /// <summary>
@@ -837,18 +837,18 @@ namespace GraphQL.Validation.Rules
             /// <summary>
             /// Returns the conflict message.
             /// </summary>
-            public string Msg { get; set; }
+            public string? Msg { get; set; }
 
             /// <summary>
             /// Returns a list of conflict reasons that triggered this conflict.
             /// </summary>
-            public List<ConflictReason> Msgs { get; set; }
+            public List<ConflictReason>? Msgs { get; set; }
         }
 
         private sealed class CachedField
         {
-            public Dictionary<string, List<FieldDefPair>> NodeAndDef { get; set; }
-            public List<string> Names { get; set; }
+            public Dictionary<string, List<FieldDefPair>> NodeAndDef { get; set; } = null!;
+            public List<string> Names { get; set; } = null!;
         }
 
         private sealed class PairSet
@@ -905,7 +905,7 @@ namespace GraphQL.Validation.Rules
 
     internal static class ISelectionExtensions
     {
-        public static string GetName(this ISelection selection)
+        public static string? GetName(this ISelection selection)
         {
             if (selection is Field field)
             {
@@ -930,7 +930,7 @@ namespace GraphQL.Validation.Rules
             return Arguments.Empty;
         }
 
-        public static SelectionSet GetSelectionSet(this ISelection selection)
+        public static SelectionSet? GetSelectionSet(this ISelection selection)
         {
             if (selection is Field field)
             {
