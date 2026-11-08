@@ -1,43 +1,48 @@
-using System.Collections.Generic;
-using System.Threading.Tasks;
-using GraphQL.Language.AST;
 using GraphQL.Validation.Errors;
+using GraphQLParser.AST;
 
-namespace GraphQL.Validation.Rules
+namespace GraphQL.Validation.Rules;
+
+/// <summary>
+/// Unique argument names:
+///
+/// A GraphQL field or directive is only valid if all supplied arguments at a given field
+/// are uniquely named.
+/// </summary>
+public class UniqueArgumentNames : ValidationRuleBase
 {
     /// <summary>
-    /// Unique argument names:
-    ///
-    /// A GraphQL field or directive is only valid if all supplied arguments at a given field
-    /// are uniquely named.
+    /// Returns a static instance of this validation rule.
     /// </summary>
-    public class UniqueArgumentNames : IValidationRule
+#pragma warning disable CS0618 // Type or member is obsolete
+    public static readonly UniqueArgumentNames Instance = new();
+#pragma warning restore CS0618 // Type or member is obsolete
+
+    /// <inheritdoc cref="UniqueArgumentNames"/>
+    [Obsolete("Please use the Instance property to retrieve a static instance. This constructor will be removed in v9.")]
+    public UniqueArgumentNames()
     {
-        /// <summary>
-        /// Returns a static instance of this validation rule.
-        /// </summary>
-        public static readonly UniqueArgumentNames Instance = new UniqueArgumentNames();
-
-        /// <inheritdoc/>
-        /// <exception cref="UniqueArgumentNamesError"/>
-        public Task<INodeVisitor> ValidateAsync(ValidationContext context) => _nodeVisitor;
-
-        private static readonly Task<INodeVisitor> _nodeVisitor = new NodeVisitors(
-            new MatchingNodeVisitor<Field>((__, context) => context.TypeInfo.UniqueArgumentNames_KnownArgs?.Clear()),
-            new MatchingNodeVisitor<Directive>((__, context) => context.TypeInfo.UniqueArgumentNames_KnownArgs?.Clear()),
-            new MatchingNodeVisitor<Argument>((argument, context) =>
-            {
-                var knownArgs = context.TypeInfo.UniqueArgumentNames_KnownArgs ??= new Dictionary<string, Argument>();
-                string argName = argument.Name;
-                if (knownArgs.ContainsKey(argName))
-                {
-                    context.ReportError(new UniqueArgumentNamesError(context, knownArgs[argName], argument));
-                }
-                else
-                {
-                    knownArgs[argName] = argument;
-                }
-            })
-        ).ToTask();
     }
+
+    /// <inheritdoc/>
+    /// <exception cref="UniqueArgumentNamesError"/>
+    public override ValueTask<INodeVisitor?> GetPreNodeVisitorAsync(ValidationContext context) => new(_nodeVisitor);
+
+    private static readonly INodeVisitor _nodeVisitor = new NodeVisitors(
+        new MatchingNodeVisitor<GraphQLField>((__, context) => context.TypeInfo.UniqueArgumentNames_KnownArgs?.Clear()),
+        new MatchingNodeVisitor<GraphQLDirective>((__, context) => context.TypeInfo.UniqueArgumentNames_KnownArgs?.Clear()),
+        new MatchingNodeVisitor<GraphQLArgument>((argument, context) =>
+        {
+            var knownArgs = context.TypeInfo.UniqueArgumentNames_KnownArgs ??= [];
+            var argName = argument.Name;
+            if (knownArgs.TryGetValue(argName, out var arg))
+            {
+                context.ReportError(new UniqueArgumentNamesError(context, arg, argument));
+            }
+            else
+            {
+                knownArgs[argName] = argument;
+            }
+        })
+    );
 }

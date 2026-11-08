@@ -1,65 +1,65 @@
-using System;
-using System.Collections.Generic;
-using GraphQL.Language.AST;
+using GraphQLParser.AST;
+using GraphQLParser.Visitors;
 
-namespace GraphQL.Validation
+namespace GraphQL.Validation;
+
+/// <summary>
+/// Walks an AST node tree executing <see cref="INodeVisitor.EnterAsync(ASTNode, ValidationContext)"/>
+/// and <see cref="INodeVisitor.LeaveAsync(ASTNode, ValidationContext)"/> methods for each node.
+/// </summary>
+public class BasicVisitor : ASTVisitor<BasicVisitor.State>
 {
+    private readonly IList<INodeVisitor> _visitors;
+
     /// <summary>
-    /// Walks an AST node tree executing <see cref="INodeVisitor.Enter(INode, ValidationContext)"/>
-    /// and <see cref="INodeVisitor.Leave(INode, ValidationContext)"/> methods for each node.
+    /// Returns a new instance configured for the specified list of <see cref="INodeVisitor"/>.
     /// </summary>
-    public readonly struct BasicVisitor
+    public BasicVisitor(params INodeVisitor[] visitors)
     {
-        // https://github.com/dotnet/roslyn/issues/39869
-        private static readonly Action<INode, State> _visitDelegate = VisitRecursive;
+        _visitors = visitors;
+    }
 
-        private readonly IList<INodeVisitor> _visitors;
+    /// <inheritdoc cref="BasicVisitor(INodeVisitor[])"/>
+    public BasicVisitor(IList<INodeVisitor> visitors)
+    {
+        _visitors = visitors;
+    }
+
+    /// <summary>
+    /// Walks the specified <see cref="ASTNode"/>, executing <see cref="INodeVisitor.EnterAsync(ASTNode, ValidationContext)"/> and
+    /// <see cref="INodeVisitor.LeaveAsync(ASTNode, ValidationContext)"/> methods for each node.
+    /// </summary>
+    public override async ValueTask VisitAsync(ASTNode? node, State context)
+    {
+        if (node != null)
+        {
+            for (int i = 0; i < _visitors.Count; ++i)
+                await _visitors[i].EnterAsync(node, context.Context).ConfigureAwait(false);
+
+            await base.VisitAsync(node, context).ConfigureAwait(false);
+
+            for (int i = _visitors.Count - 1; i >= 0; --i)
+                await _visitors[i].LeaveAsync(node, context.Context).ConfigureAwait(false);
+        }
+    }
+
+    /// <inheritdoc cref="IASTVisitorContext"/>
+    public readonly struct State : IASTVisitorContext
+    {
+        /// <summary>
+        /// Initializes a new instance with the specified validation context.
+        /// </summary>
+        public State(ValidationContext context)
+        {
+            Context = context;
+        }
 
         /// <summary>
-        /// Returns a new instance configured for the specified list of <see cref="INodeVisitor"/>.
+        /// Returns the validation context.
         /// </summary>
-        public BasicVisitor(params INodeVisitor[] visitors)
-        {
-            _visitors = visitors;
-        }
+        public ValidationContext Context { get; }
 
-        /// <inheritdoc cref="BasicVisitor(INodeVisitor[])"/>
-        public BasicVisitor(IList<INodeVisitor> visitors)
-        {
-            _visitors = visitors;
-        }
-
-        /// <summary>
-        /// Walks the specified <see cref="INode"/>, executing <see cref="INodeVisitor.Enter(INode, ValidationContext)"/> and
-        /// <see cref="INodeVisitor.Leave(INode, ValidationContext)"/> methods for each node.
-        /// </summary>
-        public void Visit(INode node, ValidationContext context) => VisitRecursive(node, new State(context, _visitors));
-
-        private static void VisitRecursive(INode node, State state)
-        {
-            if (node != null)
-            {
-                for (int i = 0; i < state.Visitors.Count; ++i)
-                    state.Visitors[i].Enter(node, state.Context);
-
-                node.Visit(_visitDelegate, state);
-
-                for (int i = state.Visitors.Count - 1; i >= 0; --i)
-                    state.Visitors[i].Leave(node, state.Context);
-            }
-        }
-
-        private readonly struct State
-        {
-            public State(ValidationContext context, IList<INodeVisitor> visitors)
-            {
-                Context = context;
-                Visitors = visitors;
-            }
-
-            public ValidationContext Context { get; }
-
-            public IList<INodeVisitor> Visitors { get; }
-        }
+        /// <inheritdoc/>
+        public CancellationToken CancellationToken => Context.CancellationToken;
     }
 }

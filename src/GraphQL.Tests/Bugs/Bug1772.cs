@@ -1,70 +1,122 @@
-using System;
-using System.Threading.Tasks;
+using GraphQL.Execution;
 using GraphQL.Types;
-using Shouldly;
-using Xunit;
+using GraphQL.Validation.Errors;
 
-namespace GraphQL.Tests.Bugs
+namespace GraphQL.Tests.Bugs;
+
+// https://github.com/graphql-dotnet/graphql-dotnet/pull/1772
+// https://github.com/graphql-dotnet/graphql-dotnet/issues/3318 and https://github.com/graphql-dotnet/graphql-dotnet/pull/3870
+public class Bug1772 : QueryTestBase<Bug1772Schema>
 {
-    // https://github.com/graphql-dotnet/graphql-dotnet/pulls/1772
-    public class Bug1772 : QueryTestBase<Bug1772Schema>
+    [Theory]
+    [InlineData("firstQuery")]
+    [InlineData("secondQuery")]
+    public async Task DocumentExecuter_works_for_valid_operation(string? operationName)
     {
-        [Theory]
-        [InlineData("")]
-        [InlineData((string)null)]
-        [InlineData("firstQuery")]
-        [InlineData("secondQuery")]
-        public async Task DocumentExecuter_works_for_valid_operation(string operationName)
+        var de = new DocumentExecuter();
+        var valid = await de.ExecuteAsync(new ExecutionOptions
         {
-            var de = new DocumentExecuter();
-            var valid = await de.ExecuteAsync(new ExecutionOptions
-            {
-                Query = "query firstQuery {test} query secondQuery {test}",
-                Schema = Schema,
-                OperationName = operationName,
-            });
-            valid.ShouldNotBeNull();
-            valid.Data.ShouldNotBeNull();
-            valid.Errors.ShouldBeNull();
-        }
-
-        [Theory]
-        [InlineData("thirdQuery")]
-        [InlineData("query")]
-        [InlineData("test")]
-        public async Task DocumentExecuter_throws_for_invalid_operation(string operationName)
-        {
-            var de = new DocumentExecuter();
-            var result = await de.ExecuteAsync(new ExecutionOptions()
-            {
-                Query = "query firstQuery {test} query secondQuery {test}",
-                Schema = Schema,
-                OperationName = operationName
-            });
-            result.ShouldNotBeNull();
-            result.Data.ShouldBeNull();
-            result.Errors.ShouldNotBeNull();
-            result.Errors.Count.ShouldBe(1);
-            result.Errors[0].Message.ShouldBe("Error executing document.");
-            result.Errors[0].InnerException.ShouldNotBeNull();
-            result.Errors[0].InnerException.ShouldBeOfType<InvalidOperationException>();
-            result.Errors[0].InnerException.Message.ShouldBe($"Query does not contain operation '{operationName}'.");
-        }
+            Query = "query firstQuery {test} query secondQuery {test}",
+            Schema = Schema,
+            OperationName = operationName,
+        });
+        valid.ShouldNotBeNull();
+        valid.Data.ShouldNotBeNull();
+        valid.Errors.ShouldBeNull();
     }
 
-    public class Bug1772Schema : Schema
+    [Theory]
+    [InlineData("thirdQuery")]
+    [InlineData("query")]
+    [InlineData("test")]
+    public async Task DocumentExecuter_throws_for_invalid_operation(string operationName)
     {
-        public Bug1772Schema()
+        var de = new DocumentExecuter();
+        var result = await de.ExecuteAsync(new ExecutionOptions()
         {
-            Query = new Bug1772Query();
-        }
+            Query = "query firstQuery {test} query secondQuery {test}",
+            Schema = Schema,
+            OperationName = operationName
+        });
+        result.ShouldNotBeNull();
+        result.Data.ShouldBeNull();
+        result.Errors.ShouldNotBeNull();
+        result.Errors.Count.ShouldBe(1);
+        result.Errors[0].ShouldBeOfType<InvalidOperationNameError>();
+        result.Errors[0].Message.ShouldBe("Document does not contain an operation named '" + operationName + "'.");
+        result.Errors[0].InnerException.ShouldBeNull();
     }
 
-    public class Bug1772Query : ObjectGraphType
+    [Fact]
+    public async Task DocumentExecuter_throws_for_multiple_operations()
     {
-        public Bug1772Query()
+        var de = new DocumentExecuter();
+        var result = await de.ExecuteAsync(new ExecutionOptions()
         {
-            Field<StringGraphType>("Test", resolve: context => "ok");
-        }
+            Query = "query firstQuery {test} query secondQuery {test}",
+            Schema = Schema,
+            OperationName = null,
+        });
+        result.ShouldNotBeNull();
+        result.Data.ShouldBeNull();
+        result.Errors.ShouldNotBeNull();
+        result.Errors.Count.ShouldBe(1);
+        result.Errors[0].ShouldBeOfType<NoOperationNameError>();
+        result.Errors[0].Message.ShouldBe("Document contains more than one operation, but the operation name was not specified.");
+        result.Errors[0].InnerException.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task DocumentExecuter_throws_for_no_operations()
+    {
+        var de = new DocumentExecuter();
+        var result = await de.ExecuteAsync(new ExecutionOptions()
+        {
+            Query = "",
+            Schema = Schema,
+            OperationName = null,
+        });
+        result.ShouldNotBeNull();
+        result.Data.ShouldBeNull();
+        result.Errors.ShouldNotBeNull();
+        result.Errors.Count.ShouldBe(1);
+        result.Errors[0].ShouldBeOfType<NoOperationError>();
+        result.Errors[0].Message.ShouldBe("Document does not contain any operations.");
+        result.Errors[0].InnerException.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task validation_error_for_duplicate_operation_names()
+    {
+        var de = new DocumentExecuter();
+        var result = await de.ExecuteAsync(new ExecutionOptions()
+        {
+            Query = "query a { test } query a { test }",
+            Schema = Schema,
+            OperationName = "a",
+        });
+        result.ShouldNotBeNull();
+        result.Data.ShouldBeNull();
+        result.Errors.ShouldNotBeNull();
+        result.Errors.Count.ShouldBe(1);
+        result.Errors[0].ShouldBeOfType<UniqueOperationNamesError>();
+        result.Errors[0].Message.ShouldBe("There can only be one operation named a.");
+        result.Errors[0].InnerException.ShouldBeNull();
+    }
+}
+
+public class Bug1772Schema : Schema
+{
+    public Bug1772Schema()
+    {
+        Query = new Bug1772Query();
+    }
+}
+
+public class Bug1772Query : ObjectGraphType
+{
+    public Bug1772Query()
+    {
+        Field<StringGraphType>("Test").Resolve(_ => "ok");
     }
 }

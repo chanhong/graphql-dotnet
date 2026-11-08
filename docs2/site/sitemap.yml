@@ -1,7 +1,7 @@
 - title: GraphQL.NET
   dir: ./
   url: /
-  file: pages/landing.js
+  file: ../src/pages/index.astro
 
 - title: Docs
   dir: ./docs
@@ -44,6 +44,8 @@
             file: unions.md
           - title: Subscriptions
             file: subscriptions.md
+          - title: Transport
+            file: transport.md
           - title: Query Validation
             file: query-validation.md
           - title: Query Organization
@@ -73,8 +75,14 @@
       - title: Guides
         dir: guides
         items:
+          - title: ASP.NET Core Integration
+            file: aspnetcore.md
+          - title: Serialization
+            file: serialization.md
           - title: Dataloader
             file: dataloader.md
+          - title: Complexity Analyzer
+            file: complexity-analyzer.md
           - title: Schema Generation
             file: schema-generation.md
           - title: Known Issues & FAQ
@@ -83,9 +91,60 @@
             file: links.md
           - title: Document Caching
             file: document-caching.md
+      - title: Analyzers
+        dir: analyzers
+        items:
+          - title: Overview
+            file: overview.md
+          - title: GQL001
+            file: gql001.md
+          - title: GQL002
+            file: gql002.md
+          - title: GQL003
+            file: gql003.md
+          - title: GQL004
+            file: gql004.md
+          - title: GQL005
+            file: gql005.md
+          - title: GQL006
+            file: gql006.md
+          - title: GQL007
+            file: gql007.md
+          - title: GQL008
+            file: gql008.md
+          - title: GQL009
+            file: gql009.md
+          - title: GQL010
+            file: gql010.md
+          - title: GQL011
+            file: gql011.md
+          - title: GQL012
+            file: gql012.md
+          - title: GQL013
+            file: gql013.md
+          - title: GQL014
+            file: gql014.md
+          - title: GQL015
+            file: gql015.md
+          - title: GQL016
+            file: gql016.md
+          - title: GQL017
+            file: gql017.md
+          - title: GQL018
+            file: gql018.md
+          - title: GQL019
+            file: gql019.md
+          - title: GQL020
+            file: gql020.md
       - title: Migration Guides
         dir: migrations
         items:
+          - title: Migration Guide [v7 -> v8]
+            file: migration8.md
+          - title: Migration Guide [v5 -> v7]
+            file: migration7.md
+          - title: Migration Guide [v4 -> v5]
+            file: migration5.md
           - title: Migration Guide [v3 -> v4]
             file: migration4.md
           - title: Migration Guide [v2 -> v3]

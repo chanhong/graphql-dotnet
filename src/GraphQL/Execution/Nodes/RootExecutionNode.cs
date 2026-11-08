@@ -1,23 +1,22 @@
-using GraphQL.Language.AST;
 using GraphQL.Types;
+using GraphQLParser.AST;
 
-namespace GraphQL.Execution
+namespace GraphQL.Execution;
+
+/// <summary>
+/// Represents a root execution node.
+/// </summary>
+public class RootExecutionNode : ObjectExecutionNode
 {
     /// <summary>
-    /// Represents a root execution node.
+    /// Initializes a new instance for the specified root graph type.
     /// </summary>
-    public class RootExecutionNode : ObjectExecutionNode
+    public RootExecutionNode(IObjectGraphType graphType, GraphQLSelectionSet? selectionSet)
+        : base(null!, graphType, null!, null!, null)
     {
-        /// <summary>
-        /// Initializes a new instance for the specified root graph type.
-        /// </summary>
-        public RootExecutionNode(IObjectGraphType graphType, SelectionSet selectionSet)
-            : base(null, graphType, null, null, null)
-        {
-            SelectionSet = selectionSet;
-        }
-
-        /// <inheritdoc/>
-        public override SelectionSet SelectionSet { get; }
+        SelectionSet = selectionSet;
     }
+
+    /// <inheritdoc/>
+    public override GraphQLSelectionSet? SelectionSet { get; }
 }

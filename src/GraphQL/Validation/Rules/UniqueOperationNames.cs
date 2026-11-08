@@ -1,39 +1,46 @@
-using System.Collections.Generic;
-using System.Threading.Tasks;
-using GraphQL.Language.AST;
 using GraphQL.Validation.Errors;
+using GraphQLParser;
+using GraphQLParser.AST;
 
-namespace GraphQL.Validation.Rules
+namespace GraphQL.Validation.Rules;
+
+/// <summary>
+/// Unique operation names:
+///
+/// A GraphQL document is only valid if all defined operations have unique names.
+/// </summary>
+public class UniqueOperationNames : ValidationRuleBase
 {
     /// <summary>
-    /// Unique operation names:
-    ///
-    /// A GraphQL document is only valid if all defined operations have unique names.
+    /// Returns a static instance of this validation rule.
     /// </summary>
-    public class UniqueOperationNames : IValidationRule
+#pragma warning disable CS0618 // Type or member is obsolete
+    public static readonly UniqueOperationNames Instance = new();
+#pragma warning restore CS0618 // Type or member is obsolete
+
+    /// <inheritdoc cref="UniqueOperationNames"/>
+    [Obsolete("Please use the Instance property to retrieve a static instance. This constructor will be removed in v9.")]
+    public UniqueOperationNames()
     {
-        /// <summary>
-        /// Returns a static instance of this validation rule.
-        /// </summary>
-        public static readonly UniqueOperationNames Instance = new UniqueOperationNames();
-
-        /// <inheritdoc/>
-        /// <exception cref="UniqueOperationNamesError"/>
-        public Task<INodeVisitor> ValidateAsync(ValidationContext context) => context.Document.Operations.Count < 2 ? null : _nodeVisitor;
-
-        private static readonly Task<INodeVisitor> _nodeVisitor = new MatchingNodeVisitor<Operation>((op, context) =>
-        {
-            if (string.IsNullOrWhiteSpace(op.Name))
-            {
-                return;
-            }
-
-            var frequency = context.TypeInfo.UniqueOperationNames_Frequency ??= new HashSet<string>();
-
-            if (!frequency.Add(op.Name))
-            {
-                context.ReportError(new UniqueOperationNamesError(context, op));
-            }
-        }).ToTask();
     }
+
+    /// <inheritdoc/>
+    /// <exception cref="UniqueOperationNamesError"/>
+    public override ValueTask<INodeVisitor?> GetPreNodeVisitorAsync(ValidationContext context)
+        => new(context.Document.OperationsCount() < 2 ? null : _nodeVisitor);
+
+    private static readonly INodeVisitor _nodeVisitor = new MatchingNodeVisitor<GraphQLOperationDefinition>((op, context) =>
+    {
+        if (op.Name is null)
+        {
+            return;
+        }
+
+        var frequency = context.TypeInfo.UniqueOperationNames_Frequency ??= [];
+
+        if (!frequency.Add(op.Name))
+        {
+            context.ReportError(new UniqueOperationNamesError(context, op));
+        }
+    });
 }

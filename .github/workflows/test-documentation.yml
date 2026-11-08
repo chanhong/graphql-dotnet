@@ -2,33 +2,30 @@ name: Test documentation
 
 on:
   pull_request:
-    branches:
-      - master
-      - develop
     paths:
       - docs2/**
-      - package.json
-      - yarn.lock
       - .github/workflows/**
-
-env:
-  NODE_VERSION: '10.x'   # Node 10 LTS
 
 jobs:
   buildcheck:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source
-        uses: actions/checkout@v2
-      - name: Use Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v1
+        uses: actions/checkout@v7
+      - name: Use Node.js from docs2/package.json
+        uses: actions/setup-node@v7
         with:
-          node-version: ${{ env.NODE_VERSION }}
-      - name: yarn
-        run: yarn
-      - name: yarn docs2
+          node-version-file: docs2/package.json
+      - name: npm ci docs2
         working-directory: docs2
-        run: yarn
-      - name: yarn gatsby build
+        run: npm ci
+      - name: npm run build
         working-directory: docs2
-        run: yarn gatsby build
+        run: npm run build
+      - name: Upload docs as workflow artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: Documentation
+          path: docs2/dist/**
+          if-no-files-found: error
+          include-hidden-files: true

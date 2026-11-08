@@ -1,13 +1,12 @@
-namespace GraphQL.Execution
+namespace GraphQL.Execution;
+
+/// <summary>
+/// Prepares <see cref="ExecutionError"/>s for serialization by the <see cref="IGraphQLSerializer"/>
+/// </summary>
+public interface IErrorInfoProvider
 {
     /// <summary>
-    /// Prepares <see cref="ExecutionError"/>s for serialization by the <see cref="IDocumentWriter"/>
+    /// Parses an <see cref="ExecutionError"/> into a <see cref="ErrorInfo"/> struct
     /// </summary>
-    public interface IErrorInfoProvider
-    {
-        /// <summary>
-        /// Parses an <see cref="ExecutionError"/> into a <see cref="ErrorInfo"/> struct
-        /// </summary>
-        ErrorInfo GetInfo(ExecutionError executionError);
-    }
+    public ErrorInfo GetInfo(ExecutionError executionError);
 }

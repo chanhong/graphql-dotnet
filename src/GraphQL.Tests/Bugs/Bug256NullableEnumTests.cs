@@ -1,68 +1,81 @@
-using System.Collections.Generic;
 using GraphQL.Execution;
-using Shouldly;
-using Xunit;
+using GraphQL.Types;
 
-namespace GraphQL.Tests.Bugs
+namespace GraphQL.Tests.Bugs;
+
+public class Bug256NullableEnumTests
 {
-    public class Bug256NullableEnumTests
+    public enum EnumType
     {
-        public enum EnumType
-        {
-            A,
-            B
-        }
+        A,
+        B
+    }
 
-        [Fact]
-        public void nullable_enum_returns_value()
+    [Fact]
+    public void nullable_enum_returns_value()
+    {
+        var ctx = new ResolveFieldContext
         {
-            var ctx = new ResolveFieldContext
+            Arguments = new Dictionary<string, ArgumentValue> { { "value", new ArgumentValue(EnumType.B, ArgumentSource.Literal) } },
+            FieldDefinition = new FieldType
             {
-                Arguments = new Dictionary<string, ArgumentValue> { { "value", new ArgumentValue(EnumType.B, ArgumentSource.Literal) } }
-            };
+                Arguments = new QueryArguments(new QueryArgument(new EnumerationGraphType<EnumType>()) { Name = "value" }),
+            },
+        };
 
-            var result = ctx.GetArgument<EnumType?>("value");
-            result.ShouldBe(EnumType.B);
-        }
+        var result = ctx.GetArgument<EnumType?>("value");
+        result.ShouldBe(EnumType.B);
+    }
 
-        [Fact]
-        public void nullable_enum_returns_null()
+    [Fact]
+    public void nullable_enum_returns_null()
+    {
+        var ctx = new ResolveFieldContext
         {
-            var ctx = new ResolveFieldContext
+            Arguments = new Dictionary<string, ArgumentValue> { { "value", ArgumentValue.NullLiteral } },
+            FieldDefinition = new FieldType
             {
-                Arguments = new Dictionary<string, ArgumentValue> { { "value", ArgumentValue.NullLiteral } }
-            };
+                Arguments = new QueryArguments(new QueryArgument(new EnumerationGraphType<EnumType>()) { Name = "value" }),
+            },
+        };
 
-            var result = ctx.GetArgument<EnumType?>("value");
-            result.ShouldBeNull();
-        }
+        var result = ctx.GetArgument<EnumType?>("value");
+        result.ShouldBeNull();
+    }
 
-        [Fact]
-        public void null_enum_returns_default()
+    [Fact]
+    public void null_enum_returns_default()
+    {
+        var ctx = new ResolveFieldContext
         {
-            var ctx = new ResolveFieldContext
+            Arguments = new Dictionary<string, ArgumentValue> { { "value", ArgumentValue.NullLiteral } },
+            FieldDefinition = new FieldType
             {
-                Arguments = new Dictionary<string, ArgumentValue> { { "value", ArgumentValue.NullLiteral } }
-            };
+                Arguments = new QueryArguments(new QueryArgument(new EnumerationGraphType<EnumType>()) { Name = "value" }),
+            },
+        };
 
-            var result = ctx.GetArgument<EnumType>("value");
-            result.ShouldBe(EnumType.A);
+        var result = ctx.GetArgument<EnumType>("value");
+        result.ShouldBe(EnumType.A);
 
-            // just place it here to also check for default value
-            var result2 = ctx.GetArgument<int>("value");
-            result2.ShouldBe(0);
-        }
+        // just place it here to also check for default value
+        int result2 = ctx.GetArgument<int>("value");
+        result2.ShouldBe(0);
+    }
 
-        [Fact]
-        public void enum_returns_value()
+    [Fact]
+    public void enum_returns_value()
+    {
+        var ctx = new ResolveFieldContext
         {
-            var ctx = new ResolveFieldContext
+            Arguments = new Dictionary<string, ArgumentValue> { { "value", new ArgumentValue(EnumType.B, ArgumentSource.Literal) } },
+            FieldDefinition = new FieldType
             {
-                Arguments = new Dictionary<string, ArgumentValue> { { "value", new ArgumentValue(EnumType.B, ArgumentSource.Literal) } }
-            };
+                Arguments = new QueryArguments(new QueryArgument(new EnumerationGraphType<EnumType>()) { Name = "value" }),
+            },
+        };
 
-            var result = ctx.GetArgument<EnumType>("value");
-            result.ShouldBe(EnumType.B);
-        }
+        var result = ctx.GetArgument<EnumType>("value");
+        result.ShouldBe(EnumType.B);
     }
 }

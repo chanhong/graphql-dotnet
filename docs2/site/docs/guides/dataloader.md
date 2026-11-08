@@ -3,6 +3,8 @@
 GraphQL.NET includes an implementation of Facebook's [DataLoader](https://github.com/facebook/dataloader) within the
 [`GraphQL.DataLoader`](https://www.nuget.org/packages/GraphQL.DataLoader) NuGet package.
 
+Sample projects demonstrating both default data loaders (as described below on this page) and [DI-based data loaders](#di-based-data-loaders) are available in the [GraphQL.NET source repository](https://github.com/graphql-dotnet/graphql-dotnet/samples). These projects cover examples of data loaders accessed via `IDataLoaderContextAccessor` as well as those implemented using dependency injection (DI).
+
 Consider a GraphQL query like this:
 
 ```graphql
@@ -30,22 +32,26 @@ In the example above, a using a DataLoader will allow us to batch together all o
 
 ## Setup
 
-1. Register `IDataLoaderContextAccessor` in your IoC container.
-2. Register `DataLoaderDocumentListener` in your IoC container.
+1. Register GraphQL services and DataLoader support (ASP.NET Core / DI setup):
 
 ``` csharp
-services.AddSingleton<IDataLoaderContextAccessor, DataLoaderContextAccessor>();
-services.AddSingleton<DataLoaderDocumentListener>();
+services.AddGraphQL(b => b
+    .AddSchema<MySchema>()
+    .AddSystemTextJson()
+    .AddDataLoader()
+    // other configurations
+);
 ```
 
-3. Hook up your GraphQL schema to your IoC container.
+`AddDataLoader()` registers the required services and automatically adds `DataLoaderDocumentListener` during execution.
+
+2. If you are not using `AddGraphQL(...)`, hook up your GraphQL schema to your IoC container.
 
 ``` csharp
 public class MySchema : Schema
 {
     public MySchema(IServiceProvider services) : base(services)
     {
-
     }
 }
 ```
@@ -54,7 +60,7 @@ public class MySchema : Schema
 services.AddSingleton<MySchema>();
 ```
 
-4. Add the `DataLoaderDocumentListener` to the `DocumentExecuter`.
+3. If you are not using `AddGraphQL(...).AddDataLoader()`, add the `DataLoaderDocumentListener` to the `DocumentExecuter` manually.
 
 ``` csharp
 var listener = Services.GetRequiredService<DataLoaderDocumentListener>();
@@ -74,7 +80,7 @@ First, inject the `IDataLoaderContextAccessor` into your GraphQL type class.
 
 Then use the `Context` property on the accessor to get the current `DataLoaderContext`. The `DataLoaderDocumentListener` configured above ensures that each request will have its own context instance.
 
-Use one of the "GetOrAddLoader" methods on the `DataLoaderContext`. These methods all require a string key to uniquely identify each loader. They also require a delegate for fetching the data. Each method will get an existing loader or add a new one, identified by the string key. Each method has various overloads to support different ways to load and map data with the keys.
+Use one of the `GetOrAdd*Loader` methods on the `DataLoaderContext`. These methods all require a string key to uniquely identify each loader. They also require a delegate for fetching the data. Each method will get an existing loader or add a new one, identified by the string key. Each method has various overloads to support different ways to load and map data with the keys.
 
 Call `LoadAsync()` on the data loader. This will queue the request and return a `IDataLoaderResult<T>`. If the result has already been cached, the returned value will be pulled from the cache.
 
@@ -90,9 +96,36 @@ method of the returned `IDataLoaderResult<T>`. You can use a synchronous or asyn
 `IDataLoaderResult<T>` if you wish to chain dataloaders together. This may result in the field builder's Resolve delegate
 signature looking like `IDataLoaderResult<IDataLoaderResult<T>>`, which is correct and will be handled properly by the execution strategy.
 
+### GetOrAddBatchLoader vs. GetOrAddCollectionBatchLoader
+
+The decision about whether to use the `GetOrAddBatchLoader` or `GetOrAddCollectionBatchLoader` method should be based on whether each key can link to only one or to multiple values:
+
+- use `GetOrAddBatchLoader` for one-to-one or many-to-one relationships, i.e. when each key links to a single value; think for example of resolving the user who made an order: each order maps to one (and only one) user;
+- use `GetOrAddCollectionBatchLoader` for one-to-many or many-to-many relationships, i.e. when each key links to multiple values; think for example of resolving orders for a user: each user may map to (zero or) more orders.
+
+Note that what matters here is the cardinality of the relation as seen from the resolver's perspective. Think for example of orders and products. In theory, a product can appear in multiple orders and an order can contain multiple products, so this is a many-to-many relationship. However, a resolver for `Product.Orders` (or alternatively, `Order.Products`) will only need to care for the one-to-many side of the relation, and thus use the `GetOrAddBatchCollectionLoader`.
+
+The same applies to one-to-many (or many-to-one) relationships. A resolver on the "one" side of the relation will need to use `GetOrAddBatchCollectionLoader`, while a resolver on the "many" side will need to use `GetOrAddBatchLoader`.
+
 ## Examples
 
-This is an example of using a DataLoader to batch requests for loading items by a key. `LoadAsync()` is called by the field resolver for each Order. `IUsersStore.GetUsersByIdAsync()` will be called with the batch of userIds that were requested.
+Below are some example implementations of a DataLoader for different use cases given the following schema:
+
+```graphql
+type Order {
+    User: User! # many-to-one
+}
+
+type User {
+    Orders: [Order!]! # one-to-many
+}
+```
+
+### One-to-one or many-to-one relationships (`Order.User`)
+
+This is an example of using a DataLoader to batch requests for loading a single item by a key. Since each order belongs to exactly one user, from the perspective of an order this is a one-to-one relationship, so we should use `GetOrAddBatchLoader`.
+
+Below, `LoadAsync()` is called by the field resolver for each Order. `IUsersStore.GetUsersByIdAsync()` will be called with the batch of userIds that were requested.
 
 ``` csharp
 public class OrderType : ObjectGraphType<Order>
@@ -119,16 +152,25 @@ public class OrderType : ObjectGraphType<Order>
     }
 }
 
-public interface IUsersStore
+public class UserStore : IUsersStore
 {
     // This will be called by the loader for all pending keys
     // Note that fetch delegates can accept a CancellationToken parameter or not
-    Task<IDictionary<int, User>> GetUsersByIdAsync(IEnumerable<int> userIds, CancellationToken cancellationToken);
+    Task<IDictionary<int, User>> GetUsersByIdAsync(IEnumerable<int> userIds, CancellationToken cancellationToken)
+    {
+        var users = await ... // load data from database
+
+		return users
+			.ToDictionary(x => x.UserId);
+    }
 }
 ```
 
+### One-to-many or many-to-many relationships (`User.Orders`)
 
-This is an example of using a DataLoader to batch requests for loading a collection of items by a key. This is used when a key may be associated with more than one item. `LoadAsync()` is called by the field resolver for each User. A User can have zero to many Orders. `IOrdersStore.GetOrdersByUserIdAsync` will be called with a batch of userIds that have been requested.
+This is an example of using a DataLoader to batch requests for loading a collection of items by a key. This is used when a key may be associated with more than one item. Since each user can have (zero or) more orders, from the perspective of a user this is a one-to-many relationship, so we should use `GetOrAddCollectionBatchLoader`.
+
+`LoadAsync()` is called by the field resolver for each User. `IOrdersStore.GetOrdersByUserIdAsync` will be called with a batch of userIds that have been requested.
 
 ``` csharp
 public class UserType : ObjectGraphType<User>
@@ -169,6 +211,8 @@ public class OrdersStore : IOrdersStore
 
 ```
 
+### No batching
+
 This is an example of using a DataLoader without batching. This could be useful if the data may be requested multiple times. The result will be cached the first time. Subsequent calls to `LoadAsync()` will return the cached result.
 
 ``` csharp
@@ -199,6 +243,8 @@ public interface IUsersStore
 }
 ```
 
+### Chained data loaders
+
 This is an example of using two chained DataLoaders to batch requests together, with asynchronous code before the data loaders execute, and post-processing afterwards.
 
 ``` csharp
@@ -216,7 +262,7 @@ public class UserType : ObjectGraphType<User>
                 // Asynchronously authenticate
                 var valid = await users.CanViewOrders(context.Source.UserId);
                 if (!valid) return null;
-                
+
                 // Get or add a collection batch loader with the key "GetOrdersByUserId"
                 // The loader will call GetOrdersByUserIdAsync with a batch of keys
                 var ordersLoader = accessor.Context.GetOrAddCollectionBatchLoader<int, Order>("GetOrdersByUserId",
@@ -268,7 +314,7 @@ public interface IItemsStore
     Task<ILookup<int, Item>> GetItemsByOrderIdAsync(IEnumerable<int> orderIds, CancellationToken cancellationToken);
 }
 ```
-> See this [blog series](https://fiyazhasan.me/graphql-with-net-core-part-xi-dataloader/) for an in depth example using Entity Framework.
+> See this [blog series](https://fiyazhasan.work/graphql-with-net-core-part-xi-dataloader/) for an in depth example using Entity Framework.
 
 ## Exceptions
 
@@ -334,7 +380,7 @@ public class MyOrderItemsDataLoader : DataLoaderBase<int, IEnumerable<OrderItem>
         _dbContext = dataContext;
     }
 
-    protected override Task FetchAsync(IEnumerable<DataLoaderPair<int, IEnumerable<OrderItem>>> list, CancellationToken cancellationToken)
+    protected override async Task FetchAsync(IEnumerable<DataLoaderPair<int, IEnumerable<OrderItem>>> list, CancellationToken cancellationToken)
     {
         IEnumerable<int> ids = list.Select(pair => pair.Key);
         IEnumerable<OrderItem> data = await _dbContext.OrderItems.Where(orderItem => ids.Contains(orderItem.OrderId)).ToListAsync(cancellationToken);
@@ -361,8 +407,7 @@ public class MyQuery : ObjectGraphType
 {
     public MyQuery()
     {
-        Field<OrderType, Order>()
-            .Name("Order")
+        Field<OrderType, Order>("Order")
             .Argument<IdGraphType>("id")
             .ResolveAsync(context =>
             {
@@ -384,8 +429,7 @@ public class OrderType : ObjectGraphType<Order>
     {
         Field(x => x.Id, type: typeof(IdGraphType));
         Field(x => x.ShipToName);
-        Field<ListGraphType<OrderItemType>, IEnumerable<OrderItem>>()
-            .Name("Items")
+        Field<ListGraphType<OrderItemType>, IEnumerable<OrderItem>>("Items")
             .ResolveAsync(context =>
             {
                 var loader = context.RequestServices.GetRequiredService<MyOrderItemsDataLoader>();
@@ -397,6 +441,31 @@ public class OrderType : ObjectGraphType<Order>
 
 You do not need to use `IDataLoaderContextAccessor` or `DataLoaderDocumentListener` and may remove those references
 from your code.
+
+You may also use the resolver builder feature of the `GraphQL.MicrosoftDI` package,
+as shown in the below example:
+
+```csharp
+    public class MyQuery : ObjectGraphType
+    {
+        public MyQuery()
+        {
+            Field<OrderType, Order>("Order")
+                .Argument<NonNullGraphType<IdGraphType>>("id")
+                .Resolve()
+                .WithService<MyOrderDataLoader>()
+                .ResolveAsync((context, loader) =>
+                {
+                    return loader.LoadAsync(context.GetArgument<int>("id"));
+                });
+        }
+    }
+```
+
+Note that if you attempt to create a service scope via `WithScope()` for a scoped
+data loader, each data loaded entry will exist in its own service scope, and none
+of the entries will be batch loaded. However, you can use a singleton data loader,
+creating a service scope for the load operation, as shown below.
 
 ## Singleton DI-based data loader instances
 
@@ -436,8 +505,7 @@ As a singleton, you can pull the singleton instance into your graphtype class in
     {
         public MyQuery(MyOrderDataLoader loader)
         {
-            Field<OrderType, Order>()
-                .Name("Order")
+            Field<OrderType, Order>("Order")
                 .Argument<IdGraphType>("id")
                 .ResolveAsync(context =>
                 {
@@ -460,7 +528,7 @@ public class MyOrderDataLoader : DataLoaderBase<int, Order>
     private readonly IMemoryCache _memoryCache;
     private readonly MemoryCacheEntryOptions _memoryCacheEntryOptions;
     private const string CACHE_PREFIX = "ORDER_";
-        
+
     public MyOrderDataLoader(IServiceProvider serviceProvider, IMemoryCache memoryCache) : base(false)
     {
         _rootServiceProvider = serviceProvider;

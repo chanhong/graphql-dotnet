@@ -5,7 +5,7 @@
 A GraphQL object type has a name and fields, but at some point those fields have to resolve
 to some concrete data. That's where the scalar types come in: they represent the leaves of the query.
 
-These are the scalars provided by the [GraphQL Specification](https://graphql.github.io/graphql-spec/June2018/#sec-Scalars).
+These are the scalars provided by the [GraphQL Specification](https://spec.graphql.org/October2021/#sec-Scalars).
 
 | GraphQL | GraphQL.NET        | .NET                    |
 |----------|---------------------|-------------------------|
@@ -20,24 +20,28 @@ These are the scalars provided by the [GraphQL Specification](https://graphql.gi
 
 These are additional scalars provided by this project.
 
-| GraphQL          | GraphQL.NET                    | .NET               | Format |
-|------------------|---------------------------------|--------------------|-------|
+| GraphQL          | GraphQL.NET                    | .NET               | Format | Remarks |
+|------------------|---------------------------------|--------------------|-------|---------|
+| `BigInt` | `BigIntGraphType` | `BigInteger` | number |
+| `Byte` | `ByteGraphType` | `byte` | number |
+| `Complex` | `ComplexScalarGraphType` | `object` | raw | |
 | `Date`           | `DateGraphType`                 | `DateTime`         | ISO-8601: yyyy-MM-dd |
+| `DateOnly` | `DateOnlyGraphType` | `DateOnly`                           | ISO-8601: yyyy-MM-dd | .NET6 and higher |
 | `DateTime`       | `DateTimeGraphType`             | `DateTime`         | ISO-8601, assume UTC |
 | `DateTimeOffset` | `DateTimeOffsetGraphType`       | `DateTimeOffset`   | ISO-8601 |
-| `Seconds`        | `TimeSpanSecondsGraphType`      | `TimeSpan`         | number |
-| `Milliseconds`   | `TimeSpanMillisecondsGraphType` | `TimeSpan`         | number |
 | `Decimal` | `DecimalGraphType` | `decimal` | number |
-| `Uri` | `UriGraphType` | `Uri` | RFC 2396/2732/3986/3987 |
 | `Guid` | `GuidGraphType` | `Guid` | string |
-| `Short` | `ShortGraphType` | `short` | number |
-| `UShort` | `UShortGraphType` | `ushort` | number |
-| `UInt` | `UIntGraphType` | `uint` | number |
+| `Half` | `HalfGraphType` | `Half` | number | .NET5 and higher |
 | `Long` | `LongGraphType` | `long` | number |
-| `ULong` | `ULongGraphType` | `ulong` | number |
-| `Byte` | `ByteGraphType` | `byte` | number |
+| `Milliseconds`   | `TimeSpanMillisecondsGraphType` | `TimeSpan`         | number |
 | `SByte` | `SByteGraphType` | `sbyte` | number |
-| `BigInt` | `BigIntGraphType` | `BigInteger` | number |
+| `Seconds`        | `TimeSpanSecondsGraphType`      | `TimeSpan`         | number |
+| `Short` | `ShortGraphType` | `short` | number |
+| `TimeOnly` | `TimeOnlyGraphType` | `TimeOnly` | ISO-8601: HH:mm:ss.FFFFFFF | .NET6 and higher |
+| `UInt` | `UIntGraphType` | `uint` | number |
+| `ULong` | `ULongGraphType` | `ulong` | number |
+| `Uri` | `UriGraphType` | `Uri` | RFC 2396/2732/3986/3987 |
+| `UShort` | `UShortGraphType` | `ushort` | number |
 
 Lists of data are also supported with any Scalar or Object types.
 
@@ -69,7 +73,7 @@ public class DroidType : ObjectGraphType<Droid>
         Name = "Droid";
         Description = "A mechanical creature in the Star Wars universe.";
         Field(d => d.Name, nullable: true).Description("The name of the droid.");
-        Field<ListGraphType<EpisodeEnum>>("appearsIn", "Which movie they appear in.");
+        Field<ListGraphType<EpisodeEnum>>("appearsIn").Description("Which movie they appear in.");
     }
 }
 ```
@@ -120,14 +124,44 @@ The name of each member _is_ the value.
 
 GraphQL.NET provides two methods of defining GraphQL enums.
 
-You can use `EnumerationGraphType<TEnum>` to automatically generate values by providing a .NET
-`enum` for `TEnum`. The `Name` will default to the .NET Type name, which you can override in
-the constructor. The `Description` will default to any `System.ComponentModel.DescriptionAttribute`
-applied to the enum type. The `DeprecationReason` will default to any `System.ObsoleteAttribute`
-applied to the enum type. By default, the name of each enum member will be converted to CONSTANT_CASE.
-Override `ChangeEnumCase` to change this behavior. Apply a `DescriptionAttribute` to an enum member
-to set the GraphQL `Description`. Apply an `ObsoleteAttribute` to an enum member to set the GraphQL
-`DeprecationReason`.
+1. You can use `EnumerationGraphType<TEnum>` to automatically generate values by providing a .NET `enum` for `TEnum`.
+
+- The `Name` will default to the .NET type name, which you can override in the constructor.
+- The `Description` will default to any `System.ComponentModel.DescriptionAttribute` applied to the enum type.
+- The `DeprecationReason` will default to any `System.ObsoleteAttribute` applied to the enum type.
+- Apply a `DescriptionAttribute` to an enum member to set the GraphQL `Description`.
+- Apply an `ObsoleteAttribute` to an enum member to set the GraphQL `DeprecationReason`.
+
+By default, the name of each enum member will be converted to CONSTANT_CASE. If you want to change
+this behavior, you can make it in two ways.
+
+a. Inherit from `EnumerationGraphType<TEnum>` and override `ChangeEnumCase` method.
+
+```csharp
+public class CamelCaseEnumerationGraphType<T> : EnumerationGraphType<T> where T : Enum
+{
+    protected override string ChangeEnumCase(string val) => val.ToCamelCase();
+}
+```
+
+and then inheriting this class instead of `EnumerationGraphType`
+
+```csharp
+public class MediaTypeEnum : CamelCaseEnumerationGraphType<MediaTypeViewModel>
+{
+}
+```
+ 
+b. Mark your .NET enum with one of the `EnumCaseAttribute` descendants (`PascalCase`,  `CamelCase`, `ConstantCase`, `AsIsCase` or your own).
+
+```csharp
+[CamelCase]
+public enum CamelCaseEnum
+{
+    FirstValue,
+    SecondValue
+}
+```
 
 ```csharp
 [Description("The Star Wars movies.")]
@@ -161,7 +195,7 @@ mapped via `Schema.RegisterTypeMapping`:
 Field(x => x.MyEnum);
 ```
 
-You can also manually create the `EnumerationGraphType`. Advantages of this method:
+2. You can also manually create the `EnumerationGraphType`. Advantages of this method:
 
 - The GraphQL enum need not map to a specific .NET `enum`. You could, for instance, build the enum from one of the alternate methods of defining discrete sets of values in .NET, such as classes of constants or static properties.
 - You can manually add descriptions and deprecation reasons. This may be useful if you do not control the source code for the enum.
@@ -174,9 +208,9 @@ public class EpisodeEnum : EnumerationGraphType
     {
         Name = "Episode";
         Description = "One of the films in the Star Wars Trilogy.";
-        AddValue("NEWHOPE", "Released in 1977.", 4);
-        AddValue("EMPIRE", "Released in 1980.", 5);
-        AddValue("JEDI", "Released in 1983.", 6);
+        Add("NEWHOPE", 4, "Released in 1977.");
+        Add("EMPIRE", 5, "Released in 1980.");
+        Add("JEDI", 6, "Released in 1983.");
     }
 }
 ```
@@ -195,7 +229,7 @@ for both human graph types. In both implementations, the client receives the Gra
 names in response to queries on the `appearsIn` field.
 
 If the field resolves a value which cannot be mapped to one of the enum's legal values,
-GraphQL.NET will trigger a [Processing Error](errors#ProcessingErrors).
+GraphQL.NET will trigger a [Processing Error](../errors#ProcessingErrors).
 
 ```csharp
 public class HumanString
@@ -209,7 +243,7 @@ public class HumanStringType: ObjectGraphType<HumanString>
     public HumanStringType()
     {
         Name = "HumanString";
-        Field<ListGraphType<EpisodeEnum>>("appearsIn", "Which movie they appear in.");
+        Field<ListGraphType<EpisodeEnum>>("appearsIn").Description("Which movie they appear in.");
     }
 }
 
@@ -224,7 +258,7 @@ public class HumanIntType: ObjectGraphType<HumanInt>
     public HumanIntType()
     {
         Name = "HumanInt";
-        Field<ListGraphType<EpisodeEnum>>("appearsIn", "Which movie they appear in.");
+        Field<ListGraphType<EpisodeEnum>>("appearsIn").Description("Which movie they appear in.");
     }
 }
 ```
@@ -260,16 +294,9 @@ be implemented as:
         {
             Name = "Query";
 
-            Field<ListGraphType<HumanType>>(
-                "humans",
-                arguments: new QueryArguments(
-                    new QueryArgument<NonNullGraphType<EpisodeEnum>>
-                        { 
-                            Name = "appearsIn", 
-                            Description = "An episode the human appears in." 
-                        }
-                ),
-                resolve: context => 
+            Field<ListGraphType<HumanType>>("humans")
+                .Argument<NonNullGraphType<EpisodeEnum>>("appearsIn", "An episode the human appears in.")
+                .Resolve(context => 
                 {
                     // episode = 4
                     var episode = context.GetArgument<int>("appearsIn");
@@ -308,12 +335,13 @@ var schema = Schema.For(definitions, c =>
 ## Type Mapping
 
 When specifying a field using the shortcut syntax `Field(x => x.Parent)`, which does not specify
-a specific graph type, GraphQL.NET will first look at the data model to see if it has a `GraphQLMetadata`
-attribute specified on it indicating the graph type to use for the data model. For instance, you can
-specify the graph type for a `Widget` class in the following manner:
+a specific graph type, GraphQL.NET will first look at the data model to see if it has an `[InputType]`
+or `[OutputType]` attribute specified on it indicating the graph type to use for the data model. For
+instance, you can specify the graph type for a `Widget` class in the following manner:
 
 ```csharp
-[GraphQLMetadata(InputType = typeof(WidgetInputGraphType), OutputType = typeof(WidgetGraphType)]
+[InputType(typeof(WidgetInputGraphType))]
+[OutputType(typeof(WidgetGraphType))]
 public class Widget
 {
     ...

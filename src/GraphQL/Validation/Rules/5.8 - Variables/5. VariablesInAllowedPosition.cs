@@ -1,80 +1,92 @@
-using System;
-using System.Collections.Generic;
-using System.Threading.Tasks;
-using GraphQL.Language.AST;
 using GraphQL.Types;
 using GraphQL.Validation.Errors;
+using GraphQLParser.AST;
 
-namespace GraphQL.Validation.Rules
+namespace GraphQL.Validation.Rules;
+
+/// <summary>
+/// Variables passed to field arguments conform to type.
+/// </summary>
+public class VariablesInAllowedPosition : ValidationRuleBase
 {
     /// <summary>
-    /// Variables passed to field arguments conform to type.
+    /// Returns a static instance of this validation rule.
     /// </summary>
-    public class VariablesInAllowedPosition : IValidationRule
+#pragma warning disable CS0618 // Type or member is obsolete
+    public static readonly VariablesInAllowedPosition Instance = new();
+#pragma warning restore CS0618 // Type or member is obsolete
+
+    /// <inheritdoc cref="VariablesInAllowedPosition"/>
+    [Obsolete("Please use the Instance property to retrieve a static instance. This constructor will be removed in v9.")]
+    public VariablesInAllowedPosition()
     {
-        /// <summary>
-        /// Returns a static instance of this validation rule.
-        /// </summary>
-        public static readonly VariablesInAllowedPosition Instance = new VariablesInAllowedPosition();
+    }
 
-        /// <inheritdoc/>
-        /// <exception cref="VariablesInAllowedPositionError"/>
-        public Task<INodeVisitor> ValidateAsync(ValidationContext context) => _nodeVisitor;
+    /// <inheritdoc/>
+    /// <exception cref="VariablesInAllowedPositionError"/>
+    public override ValueTask<INodeVisitor?> GetPreNodeVisitorAsync(ValidationContext context) => new(_nodeVisitor);
 
-        private static readonly Task<INodeVisitor> _nodeVisitor = new NodeVisitors(
-            new MatchingNodeVisitor<VariableDefinition>(
-                (varDefAst, context) =>
+    private static readonly INodeVisitor _nodeVisitor = new NodeVisitors(
+        new MatchingNodeVisitor<GraphQLVariableDefinition>(
+            (varDefAst, context) =>
+            {
+                var varDefMap = context.TypeInfo.VariablesInAllowedPosition_VarDefMap ??= [];
+                varDefMap[varDefAst.Variable.Name] = varDefAst;
+            }
+        ),
+
+        new MatchingNodeVisitor<GraphQLOperationDefinition>(
+            enter: (op, context) => context.TypeInfo.VariablesInAllowedPosition_VarDefMap?.Clear(),
+            leave: (op, context) =>
+            {
+                var varDefMap = context.TypeInfo.VariablesInAllowedPosition_VarDefMap;
+                if (varDefMap == null)
+                    return;
+
+                var usages = context.GetRecursiveVariables(op);
+                if (usages != null)
                 {
-                    var varDefMap = context.TypeInfo.VariablesInAllowedPosition_VarDefMap ??= new Dictionary<string, VariableDefinition>();
-                    varDefMap[varDefAst.Name] = varDefAst;
-                }
-            ),
-
-            new MatchingNodeVisitor<Operation>(
-                enter: (op, context) => context.TypeInfo.VariablesInAllowedPosition_VarDefMap?.Clear(),
-                leave: (op, context) =>
-                {
-                    var varDefMap = context.TypeInfo.VariablesInAllowedPosition_VarDefMap;
-                    if (varDefMap == null)
-                        return;
-
-                    foreach (var usage in context.GetRecursiveVariables(op))
+                    foreach (var usage in usages)
                     {
                         var varName = usage.Node.Name;
-                        if (!varDefMap.TryGetValue(varName, out var varDef))
+                        if (!varDefMap.TryGetValue(varName, out var varDef) || varDef == null)
                         {
                             return;
                         }
 
-                        if (varDef != null && usage.Type != null)
+                        var varType = varDef.Type.GraphTypeFromType(context.Schema);
+
+                        if (varType != null && usage.Type != null && !IsVariableUsageAllowed(varDef, varType, usage, context.Schema.Features.AllowScalarVariablesForListTypes))
                         {
-                            var varType = varDef.Type.GraphTypeFromType(context.Schema);
-                            if (varType != null && !effectiveType(varType, varDef).IsSubtypeOf(usage.Type))
-                            {
-                                context.ReportError(new VariablesInAllowedPositionError(context, varDef, varType, usage));
-                            }
+                            context.ReportError(new VariablesInAllowedPositionError(context, varDef, varType, usage));
                         }
                     }
                 }
-            )
-        ).ToTask();
-
-        /// <summary>
-        /// if a variable definition has a default value, it is effectively non-null.
-        /// </summary>
-        private static GraphType effectiveType(IGraphType varType, VariableDefinition varDef)
-        {
-            if (varDef.DefaultValue == null || varType is NonNullGraphType)
-            {
-                return (GraphType)varType;
             }
+        )
+    );
 
-            var type = varType.GetType();
-            var genericType = typeof(NonNullGraphType<>).MakeGenericType(type);
-
-            var nonNull = (NonNullGraphType)Activator.CreateInstance(genericType);
-            nonNull.ResolvedType = varType;
-            return nonNull;
+    private static bool IsVariableUsageAllowed(GraphQLVariableDefinition variableDefinition, IGraphType variableType, VariableUsage variableUsage, bool allowScalarsForLists)
+    {
+        // >> If locationType is a non-null type AND variableType is NOT a non-null type:
+        if ((variableUsage.Type is NonNullGraphType || variableUsage.IsRequired) && variableType is not NonNullGraphType)
+        {
+            // >> Let hasNonNullVariableDefaultValue be true if a default value exists for variableDefinition and is not the value null
+            var hasNonNullVariableDefaultValue = variableDefinition.DefaultValue is not null and not GraphQLNullValue;
+            // >> Let hasLocationDefaultValue be true if a default value exists for the Argument or ObjectField where variableUsage is located.
+            var hasLocationDefaultValue = variableUsage.HasDefault;
+            // >> If hasNonNullVariableDefaultValue is NOT true AND hasLocationDefaultValue is NOT true, return false.
+            if (!hasNonNullVariableDefaultValue && !hasLocationDefaultValue)
+            {
+                return false;
+            }
+            // >> Let nullableLocationType be the unwrapped nullable type of locationType.
+            // NOTE: for OneOf Input Objects, the locationType will not have a nullability wrapper.
+            var nullableLocationType = (variableUsage.Type as NonNullGraphType)?.ResolvedType! ?? variableUsage.Type;
+            // >> Return AreTypesCompatible(variableType, nullableLocationType).
+            return variableType.IsSubtypeOf(nullableLocationType, allowScalarsForLists);
         }
+        // >> Return AreTypesCompatible(variableType, locationType).
+        return variableType.IsSubtypeOf(variableUsage.Type, allowScalarsForLists);
     }
 }

@@ -6,41 +6,53 @@ on:
       - master
     paths:
       - docs2/**
-      - package.json
-      - yarn.lock
-
-env:
-  NODE_VERSION: '10.x'   # Node 10 LTS
+      - .github/workflows/publish-documentation.yml
 
 jobs:
   build-docs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source
-        uses: actions/checkout@v2
-      - name: Use Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v1
+        uses: actions/checkout@v7
         with:
-          node-version: ${{ env.NODE_VERSION }}
-      - name: yarn
-        run: yarn
-      - name: yarn docs2
-        working-directory: docs2
-        run: yarn
-      - name: yarn gatsby build
-        working-directory: docs2
-        run: yarn gatsby build
-      - name: Publish docs artifacts
-        uses: actions/upload-artifact@v2
-        with:
-          name: Documentation
-          path: docs2/public/**
-          if-no-files-found: error
-      - name: Deploy documentation
-        uses: seanmiddleditch/gha-publish-to-git@v2
+          path: main
+      - name: Checkout publish target
+        uses: actions/checkout@v7
         with:
           repository: graphql-dotnet/graphql-dotnet.github.io
-          branch: master
-          github_token: '${{ secrets.GITHUB_TOKEN  }}'
-          github_pat: '${{ secrets.ORG_PAT_TOKEN }}'
-          source_folder: docs2/public
+          token: ${{ secrets.ORG_PAT_TOKEN }}
+          path: published
+      - name: Use Node.js from docs2/package.json
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: main/docs2/package.json
+      - name: npm ci docs2
+        working-directory: main/docs2
+        run: npm ci
+      - name: npm run build
+        working-directory: main/docs2
+        run: npm run build
+      - name: Publish docs artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: Documentation
+          path: main/docs2/dist/**
+          if-no-files-found: error
+          include-hidden-files: true
+      - name: Commit docs
+        shell: bash
+        run: |
+          rsync -a --quiet --delete --exclude ".git" "main/docs2/dist/" "published/" || exit 1
+          cd published
+          git config user.name github-actions
+          git config user.email github-actions@graphql-dotnet.net
+          git add --all
+
+          err=$(git status 2>&1)
+          str="nothing to commit, working tree clean"
+          if [[ "$err" == *"$str"* ]]; then
+            echo "Documentation files are up to date, nothing to commit/push"
+          else
+            git commit -a -m "Documentation update"
+            git push
+          fi

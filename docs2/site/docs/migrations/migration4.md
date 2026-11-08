@@ -214,6 +214,7 @@ Here are some of the situations that you may run into with version 4:
 - `EnumGraphType` is stricter, requiring internal values for serialization, and external values for deserialization
 - `IdGraphType` (which allows any basic type) does not coerce variable values to trimmed strings during deserialization
 - `IdGraphType` does not trim serialized values (but does convert them to strings)
+- `DateTimeGraphType` serializes values to strings instead of letting the JSON serializer do so
 
 If you have a schema-first schema, you may run into an issue with enumeration types, since the `SchemaBuilder` uses the name of each
 enumeration value as its value also. In other words, you must return a string corresponding to the enumeration value (e.g, `"Cat"` or
@@ -362,6 +363,9 @@ to create a copy that is not re-used. Note that it is safe to use the field cont
 data loaders. Once the asynchronous field resolver or data loader returns its final result, the context will be cleared and may be re-used.
 Also, any calls to the configured `UnhandledExceptionDelegate` will receive a field context copy that will not be re-used,
 so it is safe to preserve these instances without calling `.Copy()`.
+
+In version 4.7 and newer, the context will not be re-used if the result of the resolver is an `IEnumerable`, making it safe
+to return LINQ enumerables that are based on the context source.
 
 ### Subscriptions Moved to Separate Project
 

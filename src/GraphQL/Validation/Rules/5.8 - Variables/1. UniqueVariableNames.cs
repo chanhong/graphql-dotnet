@@ -1,43 +1,48 @@
-using System.Collections.Generic;
-using System.Threading.Tasks;
-using GraphQL.Language.AST;
 using GraphQL.Validation.Errors;
+using GraphQLParser.AST;
 
-namespace GraphQL.Validation.Rules
+namespace GraphQL.Validation.Rules;
+
+/// <summary>
+/// Unique variable names:
+///
+/// A GraphQL operation is only valid if all its variables are uniquely named.
+/// </summary>
+public class UniqueVariableNames : ValidationRuleBase
 {
     /// <summary>
-    /// Unique variable names:
-    ///
-    /// A GraphQL operation is only valid if all its variables are uniquely named.
+    /// Returns a static instance of this validation rule.
     /// </summary>
-    public class UniqueVariableNames : IValidationRule
+#pragma warning disable CS0618 // Type or member is obsolete
+    public static readonly UniqueVariableNames Instance = new();
+#pragma warning restore CS0618 // Type or member is obsolete
+
+    /// <inheritdoc cref="UniqueVariableNames"/>
+    [Obsolete("Please use the Instance property to retrieve a static instance. This constructor will be removed in v9.")]
+    public UniqueVariableNames()
     {
-        /// <summary>
-        /// Returns a static instance of this validation rule.
-        /// </summary>
-        public static readonly UniqueVariableNames Instance = new UniqueVariableNames();
-
-        /// <inheritdoc/>
-        /// <exception cref="UniqueVariableNamesError"/>
-        public Task<INodeVisitor> ValidateAsync(ValidationContext context) => _nodeVisitor;
-
-        private static readonly Task<INodeVisitor> _nodeVisitor = new NodeVisitors(
-            new MatchingNodeVisitor<Operation>((__, context) => context.TypeInfo.UniqueVariableNames_KnownVariables?.Clear()),
-            new MatchingNodeVisitor<VariableDefinition>((variableDefinition, context) =>
-            {
-                var knownVariables = context.TypeInfo.UniqueVariableNames_KnownVariables ??= new Dictionary<string, VariableDefinition>();
-
-                var variableName = variableDefinition.Name;
-
-                if (knownVariables.ContainsKey(variableName))
-                {
-                    context.ReportError(new UniqueVariableNamesError(context, knownVariables[variableName], variableDefinition));
-                }
-                else
-                {
-                    knownVariables[variableName] = variableDefinition;
-                }
-            })
-        ).ToTask();
     }
+
+    /// <inheritdoc/>
+    /// <exception cref="UniqueVariableNamesError"/>
+    public override ValueTask<INodeVisitor?> GetPreNodeVisitorAsync(ValidationContext context) => new(_nodeVisitor);
+
+    private static readonly INodeVisitor _nodeVisitor = new NodeVisitors(
+        new MatchingNodeVisitor<GraphQLOperationDefinition>((__, context) => context.TypeInfo.UniqueVariableNames_KnownVariables?.Clear()),
+        new MatchingNodeVisitor<GraphQLVariableDefinition>((variableDefinition, context) =>
+        {
+            var knownVariables = context.TypeInfo.UniqueVariableNames_KnownVariables ??= [];
+
+            var variableName = variableDefinition.Variable.Name;
+
+            if (knownVariables.TryGetValue(variableName, out var variable))
+            {
+                context.ReportError(new UniqueVariableNamesError(context, variable, variableDefinition));
+            }
+            else
+            {
+                knownVariables[variableName] = variableDefinition;
+            }
+        })
+    );
 }

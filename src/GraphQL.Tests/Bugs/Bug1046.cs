@@ -1,55 +1,51 @@
 using GraphQL.Types;
-using Shouldly;
-using Xunit;
 
-namespace GraphQL.Tests.Bugs.Bug1046
+namespace GraphQL.Tests.Bugs.Bug1046;
+
+public class Bug1046
 {
-    public class Bug1046
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task any_registration_order_should_work(bool order)
     {
-        [Theory]
-        [InlineData(true)]
-        [InlineData(false)]
-        public void any_registration_order_should_work(bool order)
+        var schema = new Schema { Query = new QueryGraphType() };
+
+        if (order)
         {
-            var schema = new Schema { Query = new QueryGraphType() };
+            schema.RegisterType<ImplementationGraphType>();
+            schema.RegisterType<InterfaceGraphType>();
+        }
+        else
+        {
+            schema.RegisterType<InterfaceGraphType>();
+            schema.RegisterType<ImplementationGraphType>();
+        }
 
-            if (order)
-            {
-                schema.RegisterType<ImplementationGraphType>();
-                schema.RegisterType<InterfaceGraphType>();
-            }
-            else
-            {
-                schema.RegisterType<InterfaceGraphType>();
-                schema.RegisterType<ImplementationGraphType>();
-            }
-
-            var response = new DocumentExecuter().ExecuteAsync(_ =>
-            {
-                _.Schema = schema;
-                _.Query = @"
+        var response = await new DocumentExecuter().ExecuteAsync(_ =>
+        {
+            _.Schema = schema;
+            _.Query = """
 query {
   inst {
     id
   }
 }
-";
-            }).Result;
-            response.Data.ShouldNotBeNull();
-        }
+""";
+        });
+        response.Data.ShouldNotBeNull();
     }
-
     public class QueryGraphType : ObjectGraphType
     {
         public QueryGraphType()
         {
-            Field<InterfaceGraphType>("inst", resolve: c => new Implementation());
+            Field<InterfaceGraphType>("inst").Resolve(_ => new Implementation());
         }
     }
 
     public interface IInterface
     {
-        string Id { get; }
+        public string Id { get; }
     }
 
     public class InterfaceGraphType : InterfaceGraphType<IInterface>

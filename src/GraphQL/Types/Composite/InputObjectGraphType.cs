@@ -1,79 +1,219 @@
-using System.Collections.Generic;
-using GraphQL.Language.AST;
+using System.Reflection;
+using GraphQLParser.AST;
 
-namespace GraphQL.Types
+namespace GraphQL.Types;
+
+/// <summary>
+/// Represents an input object graph type.
+/// </summary>
+public interface IInputObjectGraphType : IComplexGraphType
 {
     /// <summary>
-    /// Represents an input object graph type.
+    /// Converts a supplied dictionary of keys and values to an object.
+    /// Overriding this method allows for customizing the deserialization process of input objects,
+    /// much like a field resolver does for output objects. For example, you can set some 'computed'
+    /// properties for your input object which were not passed in the GraphQL request.
     /// </summary>
-    public interface IInputObjectGraphType : IComplexGraphType
+    public object ParseDictionary(IDictionary<string, object?> value);
+
+    /// <summary>
+    /// Returns a boolean indicating if the provided value is valid as a default value for a
+    /// field or argument of this type.
+    /// </summary>
+    public bool IsValidDefault(object value);
+
+    /// <summary>
+    /// Converts a value to an AST representation. This is necessary for introspection queries
+    /// to return the default value for fields of this scalar type. This method may throw an exception
+    /// or return <see langword="null"/> for a failed conversion.
+    /// </summary>
+    public GraphQLValue ToAST(object value);
+
+    /// <summary>
+    /// Indicates that this type is a OneOf Input Object. This means that during parsing, the input object
+    /// must have exactly one of the fields set, which must be non-null. All fields defined on the type must
+    /// be nullable.
+    /// </summary>
+    public bool IsOneOf { get; set; }
+}
+
+/// <inheritdoc/>
+public class InputObjectGraphType : InputObjectGraphType<object>
+{
+}
+
+/// <inheritdoc cref="IInputObjectGraphType"/>
+public class InputObjectGraphType<[NotAGraphType][DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields)] TSourceType> : ComplexGraphType<TSourceType>, IInputObjectGraphType
+{
+    private Func<IDictionary<string, object?>, object>? _parseDictionary;
+
+    /// <summary>
+    /// Initializes a new instance.
+    /// </summary>
+    public InputObjectGraphType()
+        : this(null)
     {
-        /// <summary>
-        /// Converts a supplied dictionary of keys and values to an object.
-        /// Overriding this method allows for customizing the deserialization process of input objects,
-        /// much like a field resolver does for output objects. For example, you can set some 'computed'
-        /// properties for your input object which were not passed in the GraphQL request.
-        /// </summary>
-        object ParseDictionary(IDictionary<string, object> value);
+    }
 
-        /// <summary>
-        /// Returns a boolean indicating if the provided value is valid as a default value for a
-        /// field of this type.
-        /// </summary>
-        bool IsValidDefault(object value);
+    internal InputObjectGraphType(InputObjectGraphType<TSourceType>? cloneFrom)
+        : base(cloneFrom)
+    {
+        if (cloneFrom != null)
+        {
+            IsOneOf = cloneFrom.IsOneOf;
+        }
 
-        /// <summary>
-        /// Converts a value to an AST representation. This is necessary for introspection queries
-        /// to return the default value for fields of this scalar type. This method may throw an exception
-        /// or return <see langword="null"/> for a failed conversion.
-        /// </summary>
-        IValue ToAST(object value);
+        if (typeof(TSourceType) == typeof(object))
+        {
+            // for InputObjectGraphType just return the dictionary
+            _parseDictionary = static x => x;
+        }
     }
 
     /// <inheritdoc/>
-    public class InputObjectGraphType : InputObjectGraphType<object>
+    public bool IsOneOf { get; set; }
+
+    /// <inheritdoc/>
+    public override void Initialize(ISchema schema)
     {
+        base.Initialize(schema);
+
+        if (_parseDictionary == null) // when typeof(TSourceType) != typeof(object)
+        {
+            // check the value converter for a conversion from dictionary to this object type
+            var conv = ValueConverter.GetConversion(typeof(IDictionary<string, object?>), typeof(TSourceType));
+            if (conv != null)
+            {
+                _parseDictionary = conv;
+            }
+            else if (GlobalSwitches.DynamicallyCompileToObject)
+            {
+                // check if the user has overridden ParseDictionary
+                if (GetType().GetMethod(nameof(ParseDictionary), [typeof(IDictionary<string, object?>)])!.DeclaringType == typeof(InputObjectGraphType<TSourceType>))
+                {
+                    // if the user has not, validate and compile the conversion from dictionary to object immediately
+                    _parseDictionary = ObjectExtensions.CompileToObject(typeof(TSourceType), this);
+                }
+                else
+                {
+                    // if they have, validate and compile upon first use (if any)
+                    _parseDictionary = data => (_parseDictionary = ObjectExtensions.CompileToObject(typeof(TSourceType), this))(data);
+                }
+            }
+            else
+            {
+                // use reflection to convert the dictionary to object
+                _parseDictionary = ParseDictionaryViaReflection;
+            }
+        }
     }
 
-    /// <inheritdoc cref="IInputObjectGraphType"/>
-    public class InputObjectGraphType<TSourceType> : ComplexGraphType<TSourceType>, IInputObjectGraphType
+    /// <summary>
+    /// Converts a supplied dictionary of keys and values to an object.
+    /// The default implementation uses <see cref="ObjectExtensions.ToObject(IDictionary{string, object?}, Type, IGraphType)"/> to convert the
+    /// supplied field values into an object of type <typeparamref name="TSourceType"/>.
+    /// When <see cref="GlobalSwitches.DynamicallyCompileToObject"/> is <see langword="true"/>, this method is compiled to a delegate
+    /// during <see cref="Initialize"/> and the compiled delegate is used for all subsequent calls.
+    /// Overriding this method allows for customizing the deserialization process of input objects,
+    /// much like a field resolver does for output objects. For example, you can set some 'computed'
+    /// properties for your input object which were not passed in the GraphQL request.
+    /// </summary>
+    public virtual object ParseDictionary(IDictionary<string, object?> value)
     {
-        /// <summary>
-        /// Converts a supplied dictionary of keys and values to an object.
-        /// The default implementation uses <see cref="ObjectExtensions.ToObject"/> to convert the
-        /// supplied field values into an object of type <typeparamref name="TSourceType"/>.
-        /// Overriding this method allows for customizing the deserialization process of input objects,
-        /// much like a field resolver does for output objects. For example, you can set some 'computed'
-        /// properties for your input object which were not passed in the GraphQL request.
-        /// </summary>
-        public virtual object ParseDictionary(IDictionary<string, object> value)
+        if (value == null)
+            return null!;
+
+        if (_parseDictionary != null)
+            return _parseDictionary(value);
+
+        // remainder of this method should not occur unless the user has overridden Initialize
+        return ParseDictionaryViaReflection(value);
+    }
+
+    private object ParseDictionaryViaReflection(IDictionary<string, object?> value)
+        => value.ToObject(typeof(TSourceType), this);
+
+    /// <inheritdoc/>
+    public virtual bool IsValidDefault(object value)
+    {
+        if (value is not TSourceType)
+            return false;
+
+        foreach (var field in Fields)
         {
-            if (value == null)
-                return null;
-
-            // for InputObjectGraphType just return the dictionary
-            if (typeof(TSourceType) == typeof(object))
-                return value;
-
-            // for InputObjectGraphType<TSourceType>, convert to TSourceType via ToObject.
-            return value.ToObject(typeof(TSourceType), this);
+            var (fieldValue, skip) = GetFieldValue(field, value);
+            if (skip)
+                continue;
+            if (!field.ResolvedType!.IsValidDefault(fieldValue))
+                return false;
         }
 
-        /// <inheritdoc/>
-        public virtual bool IsValidDefault(object value) => value is TSourceType;
+        return true;
+    }
 
-        /// <summary>
-        /// Converts a value to an AST representation. This is necessary for introspection queries
-        /// to return the default value for fields of this input object type. This method may throw an exception
-        /// or return <see langword="null"/> for a failed conversion.
-        /// <br/><br/>
-        /// The default implementation always throws an exception. It is recommended that this method be
-        /// overridden to support introspection of fields of this type that have default values. This method
-        /// is not otherwise needed to be implemented.
-        /// </summary>
-        public virtual IValue ToAST(object value)
+    /// <summary>
+    /// Converts a value to an AST representation. This is necessary for introspection queries
+    /// to return the default value for fields of this input object type. Also AST representation
+    /// is used while printing schema as SDL.
+    /// <br/>
+    /// This method may throw an exception or return <see langword="null"/> for a failed conversion.
+    /// <br/><br/>
+    /// The default implementation returns <see cref="GraphQLNullValue"/> if <paramref name="value"/>
+    /// is <see langword="null"/> and <see cref="GraphQLObjectValue"/> filled with the values
+    /// for all input fields except ones returning <see cref="GraphQLNullValue"/>.
+    /// <br/><br/>
+    /// Note that you may need to override this method if you have already overrided <see cref="ParseDictionary"/>.
+    /// </summary>
+    public virtual GraphQLValue ToAST(object? value)
+    {
+        if (value == null)
+            return GraphQLValuesCache.Null;
+
+        var objectValue = new GraphQLObjectValue
         {
-            throw new System.NotImplementedException($"Please override the '{nameof(ToAST)}' method of the '{GetType().Name}' scalar to support this operation.");
+            Fields = new List<GraphQLObjectField>(Fields.Count)
+        };
+
+        foreach (var field in Fields)
+        {
+            var (fieldValue, skip) = GetFieldValue(field, value);
+            if (skip)
+                continue;
+            var fieldValueAst = field.ResolvedType!.ToAST(fieldValue);
+            if (fieldValueAst is not GraphQLNullValue)
+            {
+                objectValue.Fields.Add(new GraphQLObjectField(new GraphQLName(field.Name), fieldValueAst));
+            }
         }
+
+        return objectValue;
+    }
+
+    private static (object? Value, bool Skip) GetFieldValue(FieldType field, object? value)
+    {
+        if (value == null)
+            return (null, false);
+
+        // When the value is a dictionary (e.g. coerced via SchemaBuilder), use dictionary lookup by field name.
+        if (value is IDictionary<string, object?> dict)
+            return (dict.TryGetValue(field.Name, out var dictValue) ? dictValue : null, false);
+
+        // Given Field("FirstName", x => x.FName) and key == "FirstName" returns "FName"
+        string propertyName = field.GetMetadata(ComplexGraphType<object>.ORIGINAL_EXPRESSION_PROPERTY_NAME, field.Name) ?? field.Name;
+        if (propertyName == InputObjectGraphType.SKIP_EXPRESSION_VALUE_NAME)
+            return (null, true);
+        PropertyInfo? propertyInfo;
+        try
+        {
+            propertyInfo = value.GetType().GetProperty(propertyName, BindingFlags.IgnoreCase | BindingFlags.Public | BindingFlags.Instance);
+        }
+        catch (AmbiguousMatchException)
+        {
+            propertyInfo = value.GetType().GetProperty(propertyName, BindingFlags.IgnoreCase | BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly);
+        }
+
+        return (propertyInfo?.CanRead == true
+            ? propertyInfo.GetValue(value)
+            : null, false);
     }
 }

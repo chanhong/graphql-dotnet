@@ -1,20 +1,18 @@
-using System;
-using GraphQL.Language.AST;
+using GraphQLParser.AST;
 
-namespace GraphQL.Validation.Errors
+namespace GraphQL.Validation.Errors;
+
+/// <inheritdoc cref="Rules.KnownDirectivesInAllowedLocations"/>
+[Serializable]
+public class KnownDirectivesError : ValidationError
 {
-    /// <inheritdoc cref="Rules.KnownDirectivesInAllowedLocations"/>
-    [Serializable]
-    public class KnownDirectivesError : ValidationError
-    {
-        internal const string NUMBER = "5.7.1";
+    internal const string NUMBER = "5.7.1";
 
-        /// <summary>
-        /// Initializes a new instance with the specified properties.
-        /// </summary>
-        public KnownDirectivesError(ValidationContext context, Directive node)
-            : base(context.Document.OriginalQuery, NUMBER, $"Unknown directive '{node.Name}'.", node)
-        {
-        }
+    /// <summary>
+    /// Initializes a new instance with the specified properties.
+    /// </summary>
+    public KnownDirectivesError(ValidationContext context, GraphQLDirective node)
+        : base(context.Document.Source, NUMBER, $"Unknown directive '{node.Name}'.", node)
+    {
     }
 }

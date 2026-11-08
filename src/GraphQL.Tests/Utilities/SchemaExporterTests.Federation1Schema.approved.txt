@@ -1,0 +1,14 @@
+type Product @key(fields: "id") {
+  category: Category!
+  id: ID!
+  name: String!
+}
+
+extend type Category @key(fields: "id") {
+  id: ID! @external
+  products: [Product!]!
+}
+
+extend type Query {
+  products: [Product!]!
+}

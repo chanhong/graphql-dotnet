@@ -1,615 +1,742 @@
-using System;
+using System.Buffers;
 using System.Collections;
-using System.Collections.Generic;
-using System.Threading.Tasks;
+using System.Diagnostics;
 using GraphQL.DataLoader;
-using GraphQL.Language.AST;
 using GraphQL.Resolvers;
 using GraphQL.Types;
+using GraphQLParser;
+using GraphQLParser.AST;
 
-namespace GraphQL.Execution
+namespace GraphQL.Execution;
+
+/// <summary>
+/// The base class for the included serial and parallel execution strategies.
+/// </summary>
+public abstract class ExecutionStrategy : IExecutionStrategy
 {
     /// <summary>
-    /// The base class for the included serial and parallel execution strategies.
+    /// Executes a GraphQL request and returns the result. The default implementation builds the root node
+    /// and passes execution to <see cref="ExecuteNodeTreeAsync(ExecutionContext, ExecutionNode)"/>.
+    /// Once complete, the values are collected into an object that is ready to be serialized and returned
+    /// within an <see cref="ExecutionResult"/>.
     /// </summary>
-    public abstract class ExecutionStrategy : IExecutionStrategy
+    public virtual async Task<ExecutionResult> ExecuteAsync(ExecutionContext context)
     {
-        /// <summary>
-        /// Executes a GraphQL request and returns the result. The default implementation builds the root node
-        /// and passes execution to <see cref="ExecuteNodeTreeAsync(ExecutionContext, ObjectExecutionNode)"/>.
-        /// Once complete, the values are collected into an object that is ready to be serialized and returned
-        /// within an <see cref="ExecutionResult"/>.
-        /// </summary>
-        public virtual async Task<ExecutionResult> ExecuteAsync(ExecutionContext context)
+        var rootType = GetOperationRootType(context);
+        var rootNode = BuildExecutionRootNode(context, rootType);
+
+        await ExecuteNodeTreeAsync(context, rootNode).ConfigureAwait(false);
+
+        // After the entire node tree has been executed, get the values
+        object? data = rootNode.PropagateNull() ? null : rootNode;
+
+        return new ExecutionResult(context)
         {
-            var rootType = GetOperationRootType(context);
-            var rootNode = BuildExecutionRootNode(context, rootType);
+            Executed = true,
+            Data = data,
+        };
+    }
 
-            await ExecuteNodeTreeAsync(context, rootNode).ConfigureAwait(false);
+    /// <inheritdoc/>
+    public abstract Task ExecuteNodeTreeAsync(ExecutionContext context, ExecutionNode rootNode);
 
-            // After the entire node tree has been executed, get the values
-            object data = rootNode.PropagateNull() ? null : rootNode;
+    /// <summary>
+    /// Returns the root graph type for the execution -- for a specified schema and operation type.
+    /// </summary>
+    protected virtual IObjectGraphType GetOperationRootType(ExecutionContext context)
+    {
+        IObjectGraphType? type;
 
-            return new ExecutionResult
-            {
-                Executed = true,
-                Data = data,
-                Query = context.Document.OriginalQuery,
-                Document = context.Document,
-                Operation = context.Operation,
-                Extensions = context.Extensions
-            };
+        switch (context.Operation.Operation)
+        {
+            case OperationType.Query:
+                type = context.Schema.Query;
+                // note that per the GraphQL specification, a query root type is required; but currently
+                // the schema validation check is disabled to allow for test schemas
+                // that only contain a mutation or subscription root type.
+                if (type == null)
+                    throw new InvalidOperationError("Schema is not configured for queries").AddLocation(context.Operation, context.Document);
+                break;
+
+            case OperationType.Mutation:
+                type = context.Schema.Mutation;
+                if (type == null)
+                    throw new InvalidOperationError("Schema is not configured for mutations").AddLocation(context.Operation, context.Document);
+                break;
+
+            case OperationType.Subscription:
+                type = context.Schema.Subscription;
+                if (type == null)
+                    throw new InvalidOperationError("Schema is not configured for subscriptions").AddLocation(context.Operation, context.Document);
+                break;
+
+            default:
+                throw new ArgumentOutOfRangeException($"{nameof(context)}.{nameof(ExecutionContext.Operation)}", "Can only execute queries, mutations and subscriptions.");
         }
 
-        /// <summary>
-        /// Executes an execution node and all of its child nodes. This is typically only executed upon
-        /// the root execution node.
-        /// </summary>
-        protected abstract Task ExecuteNodeTreeAsync(ExecutionContext context, ObjectExecutionNode rootNode);
+        return type;
+    }
 
-        /// <summary>
-        /// Returns the root graph type for the execution -- for a specified schema and operation type.
-        /// </summary>
-        protected virtual IObjectGraphType GetOperationRootType(ExecutionContext context)
+    /// <summary>
+    /// Builds the root execution node.
+    /// </summary>
+    protected virtual RootExecutionNode BuildExecutionRootNode(ExecutionContext context, IObjectGraphType rootType)
+    {
+        var root = new RootExecutionNode(rootType, context.Operation.SelectionSet)
         {
-            IObjectGraphType type;
+            Result = context.RootValue
+        };
 
-            switch (context.Operation.OperationType)
-            {
-                case OperationType.Query:
-                    type = context.Schema.Query;
-                    break;
+        SetSubFieldNodes(context, root);
 
-                case OperationType.Mutation:
-                    type = context.Schema.Mutation;
-                    if (type == null)
-                        throw new InvalidOperationError("Schema is not configured for mutations").AddLocation(context.Operation, context.Document);
-                    break;
+        return root;
+    }
 
-                case OperationType.Subscription:
-                    type = context.Schema.Subscription;
-                    if (type == null)
-                        throw new InvalidOperationError("Schema is not configured for subscriptions").AddLocation(context.Operation, context.Document);
-                    break;
+    /// <summary>
+    /// Builds an execution node with the specified parameters.
+    /// </summary>
+    protected virtual ExecutionNode BuildExecutionNode(ExecutionNode parent, IGraphType graphType, GraphQLField field, FieldType fieldDefinition, int? indexInParentNode = null)
+    {
+        if (graphType is NonNullGraphType nonNullFieldType)
+            graphType = nonNullFieldType.ResolvedType!;
 
-                default:
-                    throw new ArgumentOutOfRangeException($"{nameof(context)}.{nameof(ExecutionContext.Operation)}", "Can only execute queries, mutations and subscriptions.");
-            }
-
-            return type;
-        }
-
-        /// <summary>
-        /// Builds the root execution node.
-        /// </summary>
-        protected virtual RootExecutionNode BuildExecutionRootNode(ExecutionContext context, IObjectGraphType rootType)
+        return graphType switch
         {
-            var root = new RootExecutionNode(rootType, context.Operation.SelectionSet)
-            {
-                Result = context.RootValue
-            };
+            ListGraphType _ => new ArrayExecutionNode(parent, graphType, field, fieldDefinition, indexInParentNode),
+            IObjectGraphType _ => new ObjectExecutionNode(parent, graphType, field, fieldDefinition, indexInParentNode),
+            IAbstractGraphType _ => new ObjectExecutionNode(parent, graphType, field, fieldDefinition, indexInParentNode),
+            ScalarGraphType scalarGraphType => new ValueExecutionNode(parent, scalarGraphType, field, fieldDefinition, indexInParentNode),
+            _ => throw new InvalidOperationException($"Unexpected type: {graphType}")
+        };
+    }
 
-            SetSubFieldNodes(context, root);
-
-            return root;
-        }
-
-        /// <summary>
-        /// Builds an execution node with the specified parameters.
-        /// </summary>
-        protected virtual ExecutionNode BuildExecutionNode(ExecutionNode parent, IGraphType graphType, Field field, FieldType fieldDefinition, int? indexInParentNode = null)
-        {
-            if (graphType is NonNullGraphType nonNullFieldType)
-                graphType = nonNullFieldType.ResolvedType;
-
-            return graphType switch
-            {
-                ListGraphType _ => new ArrayExecutionNode(parent, graphType, field, fieldDefinition, indexInParentNode),
-                IObjectGraphType _ => new ObjectExecutionNode(parent, graphType, field, fieldDefinition, indexInParentNode),
-                IAbstractGraphType _ => new ObjectExecutionNode(parent, graphType, field, fieldDefinition, indexInParentNode),
-                ScalarGraphType scalarGraphType => new ValueExecutionNode(parent, scalarGraphType, field, fieldDefinition, indexInParentNode),
-                _ => throw new InvalidOperationException($"Unexpected type: {graphType}")
-            };
-        }
-
-        /// <summary>
-        /// Examines @skip and @include directives for a node and returns a value indicating if the node should be included or not.
-        /// <br/><br/>
-        /// Note: Neither @skip nor @include has precedence over the other. In the case that both the @skip and @include
-        /// directives are provided on the same field or fragment, it must be queried only if the @skip condition
-        /// is <see langword="false"/> and the @include condition is <see langword="true"/>. Stated conversely, the field or
-        /// fragment must not be queried if either the @skip condition is <see langword="true"/> or the @include condition is <see langword="false"/>.
-        /// </summary>
-        protected virtual bool ShouldIncludeNode(ExecutionContext context, IHaveDirectives node)
-        {
-            var directives = node.Directives;
-
-            if (directives != null)
-            {
-                var directive = directives.Find(context.Schema.Directives.Skip.Name);
-                if (directive != null)
-                {
-                    var arg = context.Schema.Directives.Skip.Arguments.Find("if");
-
-                    if ((bool)ExecutionHelper.CoerceValue(arg.ResolvedType, directive.Arguments?.ValueFor(arg.Name), context.Variables, arg.DefaultValue).Value)
-                        return false;
-                }
-
-                directive = directives.Find(context.Schema.Directives.Include.Name);
-                if (directive != null)
-                {
-                    var arg = context.Schema.Directives.Include.Arguments.Find("if");
-
-                    return (bool)ExecutionHelper.CoerceValue(arg.ResolvedType, directive.Arguments?.ValueFor(arg.Name), context.Variables, arg.DefaultValue).Value;
-                }
-            }
-
+    /// <summary>
+    /// Examines @skip and @include directives for a node and returns a value indicating if the node should be included or not.
+    /// <br/><br/>
+    /// Note: Neither @skip nor @include has precedence over the other. In the case that both the @skip and @include
+    /// directives are provided on the same field or fragment, it must be queried only if the @skip condition
+    /// is <see langword="false"/> and the @include condition is <see langword="true"/>. Stated conversely, the field or
+    /// fragment must not be queried if either the @skip condition is <see langword="true"/> or the @include condition is <see langword="false"/>.
+    /// </summary>
+    protected virtual bool ShouldIncludeNode<TASTNode>(ExecutionContext context, TASTNode node)
+        where TASTNode : ASTNode, IHasDirectivesNode
+    {
+        // if the node has no directives, short-circuit processing
+        if (node.Directives == null)
             return true;
+
+        // according to GraphQL spec, directives with the same name may be defined so long as they cannot be
+        // placed on the same node types as other directives with the same name; so here we verify that the
+        // node is a field, fragment spread, or inline fragment, the only nodes allowed by the built-in @skip
+        // and @include directives
+        if (node is not GraphQLField && node is not GraphQLFragmentSpread && node is not GraphQLInlineFragment)
+            return true;
+
+        if (context.DirectiveValues?.TryGetValue(node, out var directives) ?? false)
+        {
+            // where @skip and @include are used, validation will ensure that the 'if' argument exists and is a non-null boolean
+            if (directives.TryGetValue(context.Schema.Directives.Skip.Name, out var skipDirective) &&
+                (bool)skipDirective.Arguments["if"].Value!)
+            {
+                return false;
+            }
+
+            if (directives.TryGetValue(context.Schema.Directives.Include.Name, out var includeDirective) &&
+                !(bool)includeDirective.Arguments["if"].Value!)
+            {
+                return false;
+            }
         }
 
-        /// <summary>
-        /// Creates execution nodes for child fields of an object execution node. Only run if
-        /// the object execution node result is not <see langword="null"/>.
-        /// </summary>
-        protected virtual void SetSubFieldNodes(ExecutionContext context, ObjectExecutionNode parent)
+        return true;
+    }
+
+    [ThreadStatic]
+    private static Dictionary<string, (GraphQLField, FieldType)>? _reusableFields;
+
+    /// <summary>
+    /// Creates execution nodes for child fields of an object execution node. Only run if
+    /// the object execution node result is not <see langword="null"/> or object execution
+    /// node is <see cref="RootExecutionNode"/>.
+    /// </summary>
+    protected virtual void SetSubFieldNodes(ExecutionContext context, ObjectExecutionNode parent)
+    {
+        Debug.Assert(parent.Result != null || parent is RootExecutionNode);
+
+        var parentType = parent.GetObjectGraphType(context.Schema) ?? parent.GraphType;
+        var fields = _reusableFields ??= [];
+        try
         {
-            var fields = System.Threading.Interlocked.Exchange(ref context.ReusableFields, null);
-
-            fields = CollectFieldsFrom(context, parent.GetObjectGraphType(context.Schema), parent.SelectionSet, fields);
-
-            var parentType = parent.GetObjectGraphType(context.Schema);
+            fields = CollectFieldsFrom(context, parentType, parent.SelectionSet!, fields);
 
             var subFields = new ExecutionNode[fields.Count];
 
             int i = 0;
             foreach (var kvp in fields)
             {
-                var field = kvp.Value;
-
-                var fieldDefinition = GetFieldDefinition(context.Schema, parentType, field);
-
-                if (fieldDefinition == null)
-                    throw new InvalidOperationException($"Schema is not configured correctly to fetch field '{field.Name}' from type '{parentType.Name}'.");
-
-                var node = BuildExecutionNode(parent, fieldDefinition.ResolvedType, field, fieldDefinition);
-
+                (var field, var fieldDefinition) = kvp.Value;
+                var node = BuildExecutionNode(parent, fieldDefinition.ResolvedType!, field, fieldDefinition);
                 subFields[i++] = node;
             }
 
             parent.SubFields = subFields;
 
             fields.Clear();
-            System.Threading.Interlocked.CompareExchange(ref context.ReusableFields, fields, null);
+        }
+        catch
+        {
+            _reusableFields = null;
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Returns a <see cref="FieldType"/> for the specified AST <see cref="GraphQLField"/> within a specified parent
+    /// output graph type within a given schema. For meta-fields, returns the proper meta-field field type.
+    /// </summary>
+    protected FieldType? GetFieldDefinition(ISchema schema, IComplexGraphType parentType, GraphQLField field)
+    {
+        if (field.Name == schema.SchemaMetaFieldType.Name && schema.Query == parentType)
+        {
+            return schema.SchemaMetaFieldType;
+        }
+        if (field.Name == schema.TypeMetaFieldType.Name && schema.Query == parentType)
+        {
+            return schema.TypeMetaFieldType;
+        }
+        if (field.Name == schema.TypeNameMetaFieldType.Name)
+        {
+            return schema.TypeNameMetaFieldType;
         }
 
-        /// <summary>
-        /// Returns a <see cref="FieldType"/> for the specified AST <see cref="Field"/> within a specified parent
-        /// output graph type within a given schema. For meta-fields, returns the proper meta-field field type.
-        /// </summary>
-        protected FieldType GetFieldDefinition(ISchema schema, IObjectGraphType parentType, Field field)
+        if (parentType == null)
         {
-            if (field.Name == schema.SchemaMetaFieldType.Name && schema.Query == parentType)
-            {
-                return schema.SchemaMetaFieldType;
-            }
-            if (field.Name == schema.TypeMetaFieldType.Name && schema.Query == parentType)
-            {
-                return schema.TypeMetaFieldType;
-            }
-            if (field.Name == schema.TypeNameMetaFieldType.Name)
-            {
-                return schema.TypeNameMetaFieldType;
-            }
-
-            if (parentType == null)
-            {
-                throw new ArgumentNullException(nameof(parentType), $"Schema is not configured correctly to fetch field '{field.Name}'. Are you missing a root type?");
-            }
-
-            return parentType.GetField(field.Name);
+            throw new ArgumentNullException(nameof(parentType), $"Schema is not configured correctly to fetch field '{field.Name}'. Are you missing a root type?");
         }
 
-        /// <inheritdoc/>
-        public virtual Dictionary<string, Field> GetSubFields(ExecutionContext context, ExecutionNode node)
-        {
-            return node.Field?.SelectionSet?.Selections?.Count > 0
-                ? CollectFieldsFrom(context, node.FieldDefinition.ResolvedType, node.Field.SelectionSet, null)
-                : null;
-        }
+        return parentType.GetField(field.Name);
+    }
 
-        /// <summary>
-        /// Before execution, the selection set is converted to a grouped field set by calling CollectFields().
-        /// Each entry in the grouped field set is a list of fields that share a response key (the alias if defined,
-        /// otherwise the field name). This ensures all fields with the same response key included via referenced
-        /// fragments are executed at the same time.
-        /// <br/><br/>
-        /// <see href="http://spec.graphql.org/June2018/#sec-Field-Collection"/> and <see href="http://spec.graphql.org/June2018/#CollectFields()"/>
-        /// </summary>
-        /// <param name="context">The execution context.</param>
-        /// <param name="specificType">The graph type to compare the selection set against.</param>
-        /// <param name="selectionSet">The selection set from the document.</param>
-        /// <param name="fields">A dictionary to append the collected list of fields to; if <see langword="null"/>, a new dictionary will be created.</param>
-        /// <returns>A list of collected fields</returns>
-        protected virtual Dictionary<string, Field> CollectFieldsFrom(ExecutionContext context, IGraphType specificType, SelectionSet selectionSet, Dictionary<string, Field> fields)
-        {
-            fields ??= new Dictionary<string, Field>();
-            List<string> visitedFragmentNames = null;
-            CollectFields(context, specificType.GetNamedType(), selectionSet, fields, ref visitedFragmentNames);
-            return fields;
+    /// <inheritdoc/>
+    public virtual Dictionary<string, (GraphQLField field, FieldType fieldType)>? GetSubFields(ExecutionContext context, ExecutionNode node)
+    {
+        return node.Field?.SelectionSet?.Selections?.Count > 0
+            ? CollectFieldsFrom(context, node.FieldDefinition!.ResolvedType!, node.Field.SelectionSet, null)
+            : null;
+    }
 
-            void CollectFields(ExecutionContext context, IGraphType specificType, SelectionSet selectionSet, Dictionary<string, Field> fields, ref List<string> visitedFragmentNames) //TODO: can be completely eliminated? see Fields.Add
+    /// <summary>
+    /// Before execution, the selection set is converted to a grouped field set by calling CollectFields().
+    /// Each entry in the grouped field set is a list of fields that share a response key (the alias if defined,
+    /// otherwise the field name). This ensures all fields with the same response key included via referenced
+    /// fragments are executed at the same time.
+    /// <br/><br/>
+    /// <see href="https://spec.graphql.org/October2021/#sec-Field-Collection"/> and <see href="https://spec.graphql.org/October2021/#CollectFields()"/>
+    /// </summary>
+    /// <param name="context">The execution context.</param>
+    /// <param name="specificType">The graph type to compare the selection set against. May be <see langword="null"/> for root execution node.</param>
+    /// <param name="selectionSet">The selection set from the document.</param>
+    /// <param name="fields">A dictionary to append the collected list of fields to; if <see langword="null"/>, a new dictionary will be created.</param>
+    /// <returns>A list of collected fields</returns>
+    protected virtual Dictionary<string, (GraphQLField field, FieldType fieldType)> CollectFieldsFrom(ExecutionContext context, IGraphType specificType, GraphQLSelectionSet selectionSet, Dictionary<string, (GraphQLField field, FieldType fieldType)>? fields)
+    {
+        //Debug.Assert(specificType is not IAbstractGraphType); //TODO: think about it
+
+        fields ??= [];
+
+        // TODO: DESIGN REVIEW NEEDED
+        // https://github.com/graphql-dotnet/graphql-dotnet/pull/3416
+        // SetSubFieldNodes calls CollectFieldsFrom always with IComplexGraphType resolved type even for unions and interfaces since
+        // GetObjectGraphType works well when ExecutionNode.Result is already set. In case of GetSubFields (that is called usually
+        // from IResolveFieldContext.SubFields) we have a problem - there is no ExecutionNode.Result yet (resolver did not return yet)
+        // so GetObjectGraphType returns null in case of abstract graph type (interface or union) and we try to solve it by choosing
+        // an "approximate" type - interface/union type itself. For interface it works better than for union - at least we can return
+        // fields of interface, it makes sense. What should we return in case of union? First/last/random union member? Probably the
+        // best answer here - nothing. See 'GetFieldDefinition(context.Schema, (specificType as IComplexGraphType)!, field)' call inside
+        // CollectFields that effectively filters out all unions allowing only __typename field.
+
+        // optimization for majority of cases: 0 or 1 fragment spread in selection set, so nothing to track
+        int countOfSpreads = GetFragmentSpreads(context, selectionSet);
+        ROM[]? visitedFragmentNames = null;
+        if (countOfSpreads > 1)
+            visitedFragmentNames = ArrayPool<ROM>.Shared.Rent(countOfSpreads);
+
+        CollectFields(context, specificType.GetNamedType(), selectionSet, fields, visitedFragmentNames, 0);
+
+        if (visitedFragmentNames != null)
+            ArrayPool<ROM>.Shared.Return(visitedFragmentNames, true);
+
+        return fields;
+
+        void CollectFields(ExecutionContext context, IGraphType specificType, GraphQLSelectionSet selectionSet, Dictionary<string, (GraphQLField field, FieldType fieldType)> fields, ROM[]? visitedFragmentNames, int foundFragments)
+        {
+            static bool Contains(ROM[] array, ROM item, int count)
             {
-                if (selectionSet != null)
+                for (int i = 0; i < count; ++i)
                 {
-                    foreach (var selection in selectionSet.SelectionsList)
-                    {
-                        if (selection is Field field)
-                        {
-                            if (ShouldIncludeNode(context, field))
-                                Add(fields, field);
-                        }
-                        else if (selection is FragmentSpread spread)
-                        {
-                            if (visitedFragmentNames?.Contains(spread.Name) != true && ShouldIncludeNode(context, spread))
-                            {
-                                (visitedFragmentNames ??= new List<string>()).Add(spread.Name);
-
-                                var fragment = context.Document.Fragments.FindDefinition(spread.Name);
-                                if (fragment != null && ShouldIncludeNode(context, fragment) && DoesFragmentConditionMatch(context, fragment.Type.Name, specificType))
-                                    CollectFields(context, specificType, fragment.SelectionSet, fields, ref visitedFragmentNames);
-                            }
-                        }
-                        else if (selection is InlineFragment inline)
-                        {
-                            // inline.Type may be null
-                            // See [2.8.2] Inline Fragments: If the TypeCondition is omitted, an inline fragment is considered to be of the same type as the enclosing context.
-                            if (ShouldIncludeNode(context, inline) && DoesFragmentConditionMatch(context, inline.Type?.Name ?? specificType.Name, specificType))
-                                CollectFields(context, specificType, inline.SelectionSet, fields, ref visitedFragmentNames);
-                        }
-                    }
+                    if (array[i] == item)
+                        return true;
                 }
-            }
-
-            static void Add(Dictionary<string, Field> fields, Field field)
-            {
-                string name = field.Alias ?? field.Name;
-
-                if (fields.TryGetValue(name, out Field original))
-                {
-                    // Sets a new field selection node with the child field selection nodes merged with another field's child field selection nodes.
-                    fields[name] = new Field(original.AliasNode, original.NameNode)
-                    {
-                        Arguments = original.Arguments,
-                        SelectionSet = original.SelectionSet.Merge(field.SelectionSet),
-                        Directives = original.Directives,
-                        SourceLocation = original.SourceLocation,
-                    };
-                }
-                else
-                {
-                    fields[name] = field;
-                }
-            }
-        }
-
-        /// <summary>
-        /// This method calculates the criterion for matching fragment definition (spread or inline) to a given graph type.
-        /// This criterion determines the need to fill the resulting selection set with fields from such a fragment.
-        /// <br/><br/>
-        /// <see href="http://spec.graphql.org/June2018/#DoesFragmentTypeApply()"/>
-        /// </summary>
-        protected bool DoesFragmentConditionMatch(ExecutionContext context, string fragmentName, IGraphType type /* should be named type*/)
-        {
-            if (fragmentName == null)
-                throw new ArgumentNullException(nameof(fragmentName));
-
-            var conditionalType = context.Schema.AllTypes[fragmentName];
-
-            if (conditionalType == null)
-            {
                 return false;
             }
 
-            if (conditionalType.Equals(type))
+            if (selectionSet != null)
             {
-                return true;
-            }
+                foreach (var selection in selectionSet.Selections)
+                {
+                    if (selection is GraphQLField field)
+                    {
+                        if (ShouldIncludeNode(context, field))
+                        {
+                            // parentType argument for GetFieldDefinition may be null in case of union field, in that case
+                            // GetFieldDefinition will not throw only if field is __typename
+                            var fieldType = GetFieldDefinition(context.Schema, (specificType as IComplexGraphType)!, field)
+                                ?? throw new InvalidOperationException($"Schema is not configured correctly to fetch field '{field.Name}' from type '{specificType.Name}'.");
 
-            if (conditionalType is IAbstractGraphType abstractType)
-            {
-                return abstractType.IsPossibleType(type);
-            }
+                            Add(context, fields, field, fieldType);
+                        }
+                    }
+                    else if (selection is GraphQLFragmentSpread spread)
+                    {
+                        if ((visitedFragmentNames == null || !Contains(visitedFragmentNames, spread.FragmentName.Name, foundFragments)) && ShouldIncludeNode(context, spread))
+                        {
+                            visitedFragmentNames?[foundFragments++] = spread.FragmentName.Name;
 
-            return false;
+                            var fragment = context.Document.FindFragmentDefinition(spread.FragmentName.Name);
+                            if (fragment != null && ShouldIncludeNode(context, fragment) && DoesFragmentConditionMatch(context, fragment.TypeCondition.Type.Name, specificType))
+                                CollectFields(context, specificType, fragment.SelectionSet, fields, visitedFragmentNames, foundFragments);
+                        }
+                    }
+                    else if (selection is GraphQLInlineFragment inline)
+                    {
+                        // inline.Type may be null
+                        // See [2.8.2] Inline Fragments: If the TypeCondition is omitted, an inline fragment is considered to be of the same type as the enclosing context.
+                        if (ShouldIncludeNode(context, inline) && DoesFragmentConditionMatch(context, inline.TypeCondition != null ? inline.TypeCondition.Type.Name : specificType.Name, specificType))
+                            CollectFields(context, specificType, inline.SelectionSet, fields, visitedFragmentNames, foundFragments);
+                    }
+                }
+            }
         }
 
-        /// <summary>
-        /// Creates execution nodes for array elements of an array execution node. Only run if
-        /// the array execution node result is not <see langword="null"/>.
-        /// </summary>
-        protected virtual void SetArrayItemNodes(ExecutionContext context, ArrayExecutionNode parent)
+        static void Add(ExecutionContext context, Dictionary<string, (GraphQLField Field, FieldType FieldType)> fields, GraphQLField field, FieldType fieldType)
         {
-            var listType = (ListGraphType)parent.GraphType;
-            var itemType = listType.ResolvedType;
+            string name = field.Alias != null ? field.Alias.Name.StringValue : fieldType.Name; //ISSUE:allocation in case of alias
 
-            if (itemType is NonNullGraphType nonNullGraphType)
-                itemType = nonNullGraphType.ResolvedType;
-
-            if (!(parent.Result is IEnumerable data))
+            if (fields.TryGetValue(name, out var original))
             {
-                throw new InvalidOperationException($"Expected an IEnumerable list though did not find one. Found: {parent.Result?.GetType().Name}");
-            }
-
-            int index = 0;
-            var arrayItems = (data is ICollection collection)
-                ? new List<ExecutionNode>(collection.Count)
-                : new List<ExecutionNode>();
-
-            if (data is IList list)
-            {
-                for (int i = 0; i < list.Count; ++i)
-                    SetArrayItemNode(list[i]);
+                var newField = new GraphQLField(original.Field.Name) // Sets a new field selection node with the child field selection nodes merged with another field's child field selection nodes.
+                {
+                    Alias = original.Field.Alias,
+                    Arguments = original.Field.Arguments,
+                    SelectionSet = Merge(original.Field.SelectionSet, field.SelectionSet),
+                    Directives = original.Field.Directives,
+                    Location = original.Field.Location,
+                };
+                var argumentValues = context.ArgumentValues;
+                if (argumentValues != null && argumentValues.TryGetValue(original.Field, out var arguments))
+                {
+                    // TODO: remove cast for v9 - see #4085
+                    ((IDictionary<GraphQLField, IDictionary<string, ArgumentValue>>)argumentValues)[newField] = arguments;
+                }
+                var directiveValues = context.DirectiveValues;
+                if (directiveValues != null && directiveValues.TryGetValue(original.Field, out var directives))
+                {
+                    // TODO: remove cast for v9 - see #4085
+                    ((IDictionary<ASTNode, IDictionary<string, DirectiveInfo>>)directiveValues)[newField] = directives;
+                }
+                fields[name] = (newField, original.FieldType);
             }
             else
             {
-                foreach (object d in data)
-                    SetArrayItemNode(d);
-            }
-
-            parent.Items = arrayItems;
-
-            // local function uses 'struct closure' without heap allocation
-            void SetArrayItemNode(object d)
-            {
-                var node = BuildExecutionNode(parent, itemType, parent.Field, parent.FieldDefinition, index++);
-                node.Result = d;
-
-                if (!(d is IDataLoaderResult))
-                {
-                    CompleteNode(context, node);
-                }
-
-                arrayItems.Add(node);
+                fields[name] = (field, fieldType);
             }
         }
 
-        /// <summary>
-        /// Executes a single node. If the node does not return an <see cref="IDataLoaderResult"/>,
-        /// it will pass execution to <see cref="CompleteNode(ExecutionContext, ExecutionNode)"/>.
-        /// </summary>
-        protected virtual async Task ExecuteNodeAsync(ExecutionContext context, ExecutionNode node)
+        // Returns a new selection set node with the contents merged with another selection set node's contents.
+        static GraphQLSelectionSet? Merge(GraphQLSelectionSet? selection, GraphQLSelectionSet? otherSelection)
         {
-            context.CancellationToken.ThrowIfCancellationRequested();
+            if (selection == null)
+                return otherSelection;
 
-            // these are the only conditions upon which a node has already been executed when this method is called
-            if (node is RootExecutionNode || node.Parent is ArrayExecutionNode)
-                return;
+            if (otherSelection == null)
+                return selection;
 
-            try
-            {
-                ReadonlyResolveFieldContext resolveContext = System.Threading.Interlocked.Exchange(ref context.ReusableReadonlyResolveFieldContext, null);
-                resolveContext = resolveContext != null ? resolveContext.Reset(node, context) : new ReadonlyResolveFieldContext(node, context);
-
-                var resolver = node.FieldDefinition.Resolver ?? NameFieldResolver.Instance;
-                var result = resolver.Resolve(resolveContext);
-
-                if (result is Task task)
-                {
-                    await task.ConfigureAwait(false);
-                    result = task.GetResult();
-                }
-
-                node.Result = result;
-
-                if (!(result is IDataLoaderResult))
-                {
-                    CompleteNode(context, node);
-                    // for non-dataloader nodes that completed without throwing an error, we can re-use the context
-                    resolveContext.Reset(null, null);
-                    System.Threading.Interlocked.CompareExchange(ref context.ReusableReadonlyResolveFieldContext, resolveContext, null);
-                }
-            }
-            catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (ExecutionError error)
-            {
-                SetNodeError(context, node, error);
-            }
-            catch (Exception ex)
-            {
-                if (ProcessNodeUnhandledException(context, node, ex))
-                    throw;
-            }
+            return new GraphQLSelectionSet(selection.Selections.Union(otherSelection.Selections).ToList());
         }
 
-        /// <summary>
-        /// Completes a pending data loader node. If the node does not return an <see cref="IDataLoaderResult"/>,
-        /// it will pass execution to <see cref="CompleteNode(ExecutionContext, ExecutionNode)"/>.
-        /// </summary>
-        protected virtual async Task CompleteDataLoaderNodeAsync(ExecutionContext context, ExecutionNode node)
+        static int GetFragmentSpreads(ExecutionContext context, GraphQLSelectionSet selectionSet)
         {
-            if (!(node.Result is IDataLoaderResult dataLoaderResult))
-                throw new InvalidOperationException("This execution node is not pending completion");
+            int count = 0;
 
-            try
+            foreach (var selection in selectionSet.Selections)
             {
-                node.Result = await dataLoaderResult.GetResultAsync(context.CancellationToken).ConfigureAwait(false);
-
-                if (!(node.Result is IDataLoaderResult))
+                if (selection is GraphQLFragmentSpread spread)
                 {
-                    CompleteNode(context, node);
-                }
-            }
-            catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (ExecutionError error)
-            {
-                SetNodeError(context, node, error);
-            }
-            catch (Exception ex)
-            {
-                if (ProcessNodeUnhandledException(context, node, ex))
-                    throw;
-            }
-        }
+                    ++count;
 
-        /// <summary>
-        /// Validates a node result. Builds child nodes via <see cref="SetSubFieldNodes(ExecutionContext, ObjectExecutionNode)">SetSubFieldNodes</see>
-        /// and <see cref="SetArrayItemNodes(ExecutionContext, ArrayExecutionNode)">SetArrayItemNodes</see>, but does not execute them. For value
-        /// execution nodes, it will run <see cref="ScalarGraphType.Serialize(object)"/> to serialize the result.
-        /// </summary>
-        protected virtual void CompleteNode(ExecutionContext context, ExecutionNode node)
-        {
-            try
-            {
-                if (node is ValueExecutionNode valueNode)
-                {
-                    node.Result = valueNode.GraphType.Serialize(node.Result);
-                }
-
-                ValidateNodeResult(context, node);
-
-                // Build child nodes
-                if (node.Result != null)
-                {
-                    if (node is ObjectExecutionNode objectNode)
+                    var fragment = context.Document.FindFragmentDefinition(spread.FragmentName.Name);
+                    if (fragment != null)
                     {
-                        SetSubFieldNodes(context, objectNode);
-                    }
-                    else if (node is ArrayExecutionNode arrayNode)
-                    {
-                        SetArrayItemNodes(context, arrayNode);
+                        count += GetFragmentSpreads(context, fragment.SelectionSet);
                     }
                 }
+                else if (selection is GraphQLInlineFragment inline)
+                {
+                    count += GetFragmentSpreads(context, inline.SelectionSet);
+                }
             }
-            catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (ExecutionError error)
-            {
-                SetNodeError(context, node, error);
-            }
-            catch (Exception ex)
-            {
-                if (ProcessNodeUnhandledException(context, node, ex))
-                    throw;
-            }
+
+            return count;
         }
+    }
 
-        /// <summary>
-        /// Sets the location and path information to the error and adds it to the document. Sets the node result to <see langword="null"/>.
-        /// </summary>
-        protected virtual void SetNodeError(ExecutionContext context, ExecutionNode node, ExecutionError error)
+    /// <summary>
+    /// This method calculates the criterion for matching fragment definition (spread or inline) to a given graph type.
+    /// This criterion determines the need to fill the resulting selection set with fields from such a fragment.
+    /// <br/><br/>
+    /// <see href="https://spec.graphql.org/October2021/#DoesFragmentTypeApply()"/>
+    /// </summary>
+    protected bool DoesFragmentConditionMatch(ExecutionContext context, ROM fragmentName, IGraphType type /* should be named type*/)
+    {
+        if (fragmentName.IsEmpty)
+            throw new ArgumentException("Fragment name can not be empty", nameof(fragmentName));
+
+        var conditionalType = context.Schema.AllTypes[fragmentName];
+
+        if (conditionalType == null)
         {
-            error.AddLocation(node.Field, context.Document);
-            error.Path = node.ResponsePath;
-            context.Errors.Add(error);
-
-            node.Result = null;
-        }
-
-        /// <summary>
-        /// Processes unhandled field resolver exceptions.
-        /// </summary>
-        /// <returns>A value that indicates when the exception should be rethrown.</returns>
-        protected virtual bool ProcessNodeUnhandledException(ExecutionContext context, ExecutionNode node, Exception ex)
-        {
-            if (context.ThrowOnUnhandledException)
-                return true;
-
-            UnhandledExceptionContext exceptionContext = null;
-            if (context.UnhandledExceptionDelegate != null)
-            {
-                // be sure not to re-use this instance of `IResolveFieldContext`
-                var resolveContext = new ReadonlyResolveFieldContext(node, context);
-                exceptionContext = new UnhandledExceptionContext(context, resolveContext, ex);
-                context.UnhandledExceptionDelegate(exceptionContext);
-                ex = exceptionContext.Exception;
-            }
-
-            var error = ex is ExecutionError executionError ? executionError : new UnhandledError(exceptionContext?.ErrorMessage ?? $"Error trying to resolve field '{node.Name}'.", ex);
-
-            SetNodeError(context, node, error);
-
             return false;
         }
 
-        /// <summary>
-        /// Validates the <see cref="ExecutionNode.Result"/> to ensure that it is valid for the node.
-        /// Errors typically occur when a null value is returned for a non-null graph type. Also validates the
-        /// object type when <see cref="IObjectGraphType.IsTypeOf"/> is assigned, or when the graph type
-        /// is an <see cref="IAbstractGraphType"/>.
-        /// </summary>
-        protected virtual void ValidateNodeResult(ExecutionContext context, ExecutionNode node)
+        if (conditionalType.Equals(type))
         {
-            var result = node.Result;
+            return true;
+        }
 
-            IGraphType fieldType = node.ResolvedType;
-            var objectType = fieldType as IObjectGraphType;
+        if (conditionalType is IAbstractGraphType abstractType)
+        {
+            return abstractType.IsPossibleType(type);
+        }
 
-            if (fieldType is NonNullGraphType nonNullType)
+        return false;
+    }
+
+    /// <summary>
+    /// Creates execution nodes for array elements of an array execution node. Only run if
+    /// the array execution node result is not <see langword="null"/>.
+    /// </summary>
+    protected virtual async Task SetArrayItemNodesAsync(ExecutionContext context, ArrayExecutionNode parent)
+    {
+        var listType = (ListGraphType)parent.GraphType!;
+        var itemType = listType.ResolvedType!;
+
+        bool allowNulls = true;
+        if (itemType is NonNullGraphType nonNullGraphType)
+        {
+            allowNulls = false;
+            itemType = nonNullGraphType.ResolvedType!;
+        }
+
+        if (parent.Result is string || parent.Result is not IEnumerable data)
+        {
+            throw new InvalidOperationException($"Expected an IEnumerable list though did not find one. Found: {parent.Result?.GetType().GetFriendlyName()}");
+        }
+
+        if (itemType is ScalarGraphType scalarType && scalarType.CanSerializeList(data, allowNulls))
+        {
+            parent.SerializedResult = scalarType.SerializeList(data);
+            return;
+        }
+
+        int index = 0;
+        var arrayItems = (data is ICollection collection)
+            ? new List<ExecutionNode>(collection.Count)
+            : [];
+
+        if (data is IList list)
+        {
+            for (int i = 0; i < list.Count; ++i)
+                await SetArrayItemNode(list[i]).ConfigureAwait(false);
+        }
+        else
+        {
+            foreach (object? d in data)
+                await SetArrayItemNode(d).ConfigureAwait(false);
+        }
+
+        parent.Items = arrayItems;
+
+        // local function uses 'struct closure' without heap allocation
+        async Task SetArrayItemNode(object? d)
+        {
+            var node = BuildExecutionNode(parent, itemType, parent.Field!, parent.FieldDefinition!, index++);
+            node.Result = d;
+
+            if (d is not IDataLoaderResult)
             {
-                if (result == null)
-                {
-                    throw new InvalidOperationException("Cannot return null for a non-null type."
-                        + $" Field: {node.Name}, Type: {nonNullType}.");
-                }
-
-                objectType = nonNullType.ResolvedType as IObjectGraphType;
+                await CompleteNodeAsync(context, node).ConfigureAwait(false);
             }
 
+            arrayItems.Add(node);
+        }
+    }
+
+    /// <summary>
+    /// Selects resolver for the specified execution node. By default returns resolver from
+    /// <see cref="ExecutionNode.FieldDefinition"/> if specified. Otherwise returns
+    /// <see cref="SourceFieldResolver.Instance"/> for top level nodes of subscriptions or
+    /// <see cref="NameFieldResolver.Instance"/> for all other cases.
+    /// </summary>
+    protected virtual IFieldResolver SelectResolver(ExecutionNode node, ExecutionContext context)
+        => node.FieldDefinition.Resolver ?? (node.Parent is RootExecutionNode && context.Operation.Operation == OperationType.Subscription ? SourceFieldResolver.Instance : NameFieldResolver.Instance);
+
+    [ThreadStatic]
+    private static ReadonlyResolveFieldContext? _readonlyResolveFieldContext;
+
+    /// <summary>
+    /// Executes a single node. If the node does not return an <see cref="IDataLoaderResult"/>,
+    /// it will pass execution to <see cref="CompleteNodeAsync(ExecutionContext, ExecutionNode)"/>.
+    /// </summary>
+    protected virtual async Task ExecuteNodeAsync(ExecutionContext context, ExecutionNode node)
+    {
+        context.CancellationToken.ThrowIfCancellationRequested();
+
+        // these are the only conditions upon which a node has already been executed when this method is called
+        if (node is RootExecutionNode || node.Parent is ArrayExecutionNode)
+            return;
+
+        try
+        {
+            var resolveContext = _readonlyResolveFieldContext;
+            _readonlyResolveFieldContext = null;
+            resolveContext = resolveContext != null ? resolveContext.Reset(node, context) : new ReadonlyResolveFieldContext(node, context);
+
+            var resolver = SelectResolver(node, context);
+            object? result = await resolver.ResolveAsync(resolveContext).ConfigureAwait(false);
+
+            node.Result = result;
+
+            if (result is not IDataLoaderResult)
+            {
+                await CompleteNodeAsync(context, node).ConfigureAwait(false);
+                // for non-dataloader nodes that completed without throwing an error, we can re-use the context,
+                // except for enumerable lists - in case the user returned a value with LINQ that is based on the context source
+                if (result is not IEnumerable || result is string)
+                {
+                    // also see FuncFieldResolver.GetResolverFor as it relates to context re-use
+                    _readonlyResolveFieldContext ??= resolveContext.Reset(null, null);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (ExecutionError error)
+        {
+            SetNodeError(context, node, error);
+        }
+        catch (Exception ex)
+        {
+            if (await ProcessNodeUnhandledExceptionAsync(context, node, ex).ConfigureAwait(false))
+                throw;
+        }
+    }
+
+    /// <summary>
+    /// Completes a pending data loader node. If the node does not return an <see cref="IDataLoaderResult"/>,
+    /// it will pass execution to <see cref="CompleteNodeAsync(ExecutionContext, ExecutionNode)"/>.
+    /// </summary>
+    protected virtual async Task CompleteDataLoaderNodeAsync(ExecutionContext context, ExecutionNode node)
+    {
+        if (node.Result is not IDataLoaderResult dataLoaderResult)
+            throw new InvalidOperationException("This execution node is not pending completion");
+
+        var resolveFieldContextAccessor = (context.Schema as Schema)?.ResolveFieldContextAccessor;
+        try
+        {
+            if (resolveFieldContextAccessor != null)
+            {
+                // duplicate the async context to avoid polluting it for other continuations (since callers
+                // to this method do not always immediately await it)
+                await Inner().ConfigureAwait(false);
+
+                async Task Inner()
+                {
+                    resolveFieldContextAccessor.Context = new ReadonlyResolveFieldContext(node, context);
+                    try
+                    {
+                        await CompleteDataLoaderNodeImplAsync().ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        resolveFieldContextAccessor.Context = null;
+                    }
+                }
+            }
+            else
+            {
+                await CompleteDataLoaderNodeImplAsync().ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (ExecutionError error)
+        {
+            SetNodeError(context, node, error);
+        }
+        catch (Exception ex)
+        {
+            if (await ProcessNodeUnhandledExceptionAsync(context, node, ex).ConfigureAwait(false))
+                throw;
+        }
+
+        async Task CompleteDataLoaderNodeImplAsync()
+        {
+            node.Result = await dataLoaderResult.GetResultAsync(context.CancellationToken).ConfigureAwait(false);
+
+            if (node.Result is not IDataLoaderResult)
+            {
+                await CompleteNodeAsync(context, node).ConfigureAwait(false);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Validates a node result. Builds child nodes via <see cref="SetSubFieldNodes(ExecutionContext, ObjectExecutionNode)">SetSubFieldNodes</see>
+    /// and <see cref="SetArrayItemNodesAsync(ExecutionContext, ArrayExecutionNode)">SetArrayItemNodes</see>, but does not execute them. For value
+    /// execution nodes, it will run <see cref="ScalarGraphType.Serialize(object)"/> to serialize the result.
+    /// </summary>
+    protected virtual async Task CompleteNodeAsync(ExecutionContext context, ExecutionNode node)
+    {
+        try
+        {
+            if (node is ValueExecutionNode valueNode)
+            {
+                node.Result = valueNode.GraphType.Serialize(node.Result);
+            }
+
+            ValidateNodeResult(context, node);
+
+            // Build child nodes
+            if (node.Result != null)
+            {
+                if (node is ObjectExecutionNode objectNode)
+                {
+                    SetSubFieldNodes(context, objectNode);
+                }
+                else if (node is ArrayExecutionNode arrayNode)
+                {
+                    await SetArrayItemNodesAsync(context, arrayNode).ConfigureAwait(false);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (ExecutionError error)
+        {
+            SetNodeError(context, node, error);
+        }
+        catch (Exception ex)
+        {
+            if (await ProcessNodeUnhandledExceptionAsync(context, node, ex).ConfigureAwait(false))
+                throw;
+        }
+    }
+
+    /// <summary>
+    /// Sets the location and path information to the error and adds it to the document. Sets the node result to <see langword="null"/>.
+    /// </summary>
+    protected virtual void SetNodeError(ExecutionContext context, ExecutionNode node, ExecutionError error)
+    {
+        error.AddLocation(node.Field, context.Document);
+        error.Path = node.ResponsePath;
+        context.Errors.Add(error);
+
+        node.Result = null;
+    }
+
+    /// <summary>
+    /// Processes unhandled field resolver exceptions.
+    /// </summary>
+    /// <returns>A value that indicates when the exception should be rethrown.</returns>
+    protected virtual async Task<bool> ProcessNodeUnhandledExceptionAsync(ExecutionContext context, ExecutionNode node, Exception ex)
+    {
+        if (context.ThrowOnUnhandledException)
+            return true;
+
+        UnhandledExceptionContext? exceptionContext = null;
+        if (context.UnhandledExceptionDelegate != null)
+        {
+            // be sure not to re-use this instance of `IResolveFieldContext`
+            var resolveContext = new ReadonlyResolveFieldContext(node, context);
+            exceptionContext = new UnhandledExceptionContext(context, resolveContext, ex);
+            await context.UnhandledExceptionDelegate(exceptionContext).ConfigureAwait(false);
+            ex = exceptionContext.Exception;
+        }
+
+        var error = ex is ExecutionError executionError ? executionError : new UnhandledError(exceptionContext?.ErrorMessage ?? $"Error trying to resolve field '{node.Name}'.", ex);
+
+        SetNodeError(context, node, error);
+
+        return false;
+    }
+
+    /// <summary>
+    /// Validates the <see cref="ExecutionNode.Result"/> to ensure that it is valid for the node.
+    /// Errors typically occur when a null value is returned for a non-null graph type. Also validates the
+    /// object type when <see cref="IObjectGraphType.IsTypeOf"/> is assigned, or when the graph type
+    /// is an <see cref="IAbstractGraphType"/>.
+    /// </summary>
+    protected virtual void ValidateNodeResult(ExecutionContext context, ExecutionNode node)
+    {
+        object? result = node.Result;
+
+        IGraphType? fieldType = node.ResolvedType;
+
+        if (fieldType is NonNullGraphType nonNullType)
+        {
             if (result == null)
             {
-                return;
+                throw new InvalidOperationException("Cannot return null for a non-null type."
+                    + $" Field: {node.Name}, Type: {nonNullType}.");
             }
 
-            if (fieldType is IAbstractGraphType abstractType)
+            fieldType = nonNullType.ResolvedType;
+        }
+
+        if (result == null)
+        {
+            return;
+        }
+
+        var objectType = fieldType as IObjectGraphType;
+
+        if (fieldType is IAbstractGraphType abstractType)
+        {
+            objectType = abstractType.GetObjectType(result, context.Schema);
+
+            if (objectType == null)
             {
-                objectType = abstractType.GetObjectType(result, context.Schema);
-
-                if (objectType == null)
-                {
-                    throw new InvalidOperationException(
-                        $"Abstract type {abstractType.Name} must resolve to an Object type at " +
-                        $"runtime for field {node.Parent.GraphType.Name}.{node.Name} " +
-                        $"with value '{result}', received 'null'.");
-                }
-
-                if (!abstractType.IsPossibleType(objectType))
-                {
-                    throw new InvalidOperationException($"Runtime Object type '{objectType}' is not a possible type for '{abstractType}'.");
-                }
+                throw new InvalidOperationException(
+                    $"Abstract type {abstractType.Name} must resolve to an Object type at " +
+                    $"runtime for field {(node.IndexInParentNode.HasValue ? node.Parent?.Parent : node.Parent)?.GraphType?.Name}.{node.FieldDefinition.Name} " +
+                    $"with value '{result}', received 'null'.");
             }
 
-            if (objectType?.IsTypeOf != null && !objectType.IsTypeOf(result))
+            if (!abstractType.IsPossibleType(objectType))
             {
-                throw new InvalidOperationException($"'{result}' value of type '{result.GetType()}' is not allowed for '{objectType.Name}'. Either change IsTypeOf method of '{objectType.Name}' to accept this value or return another value from your resolver.");
+                throw new InvalidOperationException($"Runtime Object type '{objectType}' is not a possible type for '{abstractType}'.");
             }
         }
 
-        /// <summary>
-        /// If there are any <see cref="IDocumentExecutionListener"/>s specified within the <see cref="ExecutionContext"/>,
-        /// runs the <see cref="IDocumentExecutionListener.BeforeExecutionStepAwaitedAsync(IExecutionContext)">BeforeExecutionStepAwaitedAsync</see>
-        /// method on each of the registered document execution listeners.
-        /// <br/><br/>
-        /// This method will be removed in version 5.
-        /// </summary>
-        [Obsolete]
-        protected virtual async Task OnBeforeExecutionStepAwaitedAsync(ExecutionContext context)
+        if (objectType?.IsTypeOf != null && !objectType.SkipTypeCheck && !objectType.IsTypeOf(result))
         {
-            if (context.Listeners != null)
-            {
-                foreach (var listener in context.Listeners)
-                {
-                    await listener.BeforeExecutionStepAwaitedAsync(context)
-                        .ConfigureAwait(false);
-                }
-            }
+            throw new InvalidOperationException($"'{result}' value of type '{result.GetType()}' is not allowed for '{objectType.Name}'. Either change IsTypeOf method of '{objectType.Name}' to accept this value or return another value from your resolver.");
         }
     }
 }

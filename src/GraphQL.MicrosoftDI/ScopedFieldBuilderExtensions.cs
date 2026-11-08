@@ -1,29 +1,56 @@
-using System;
-using System.Threading.Tasks;
 using GraphQL.Builders;
+using GraphQL.DataLoader;
+using GraphQL.Types;
 
-namespace GraphQL.MicrosoftDI
+namespace GraphQL.MicrosoftDI;
+
+/// <summary>
+/// Extension methods for creating resolver builders.
+/// </summary>
+public static class ScopedFieldBuilderExtensions
 {
     /// <summary>
-    /// Extension methods for creating resolver builders.
+    /// Applies scoped middleware to the field. A dependency injection scope is created for the duration of the field resolver's execution
+    /// and the scoped service provider is passed within <see cref="IResolveFieldContext.RequestServices"/>.
     /// </summary>
-    public static class ScopedFieldBuilderExtensions
+    [AllowedOn<IObjectGraphType>]
+    internal static FieldBuilder<TSourceType, TReturnType> Scoped<TSourceType, TReturnType>(this FieldBuilder<TSourceType, TReturnType> builder)
     {
-        /// <summary>
-        /// Sets the resolver for the field. A dependency injection scope is created for the duration of the resolver's execution
-        /// and the scoped service provider is passed within <see cref="IResolveFieldContext.RequestServices"/>.
-        /// </summary>
-        public static FieldBuilder<TSourceType, TReturnType> ResolveScoped<TSourceType, TReturnType>(this FieldBuilder<TSourceType, TReturnType> builder, Func<IResolveFieldContext<TSourceType>, TReturnType> resolver)
-            => builder.Resolve(new ScopedFieldResolver<TSourceType, TReturnType>(resolver));
+        // Apply scoped middleware to the field resolver
+        builder.FieldType.ApplyMiddleware(ScopedFieldMiddleware.Instance);
 
-        /// <inheritdoc cref="ResolveScoped{TSourceType, TReturnType}(FieldBuilder{TSourceType, TReturnType}, Func{IResolveFieldContext{TSourceType}, TReturnType})"/>
-        public static FieldBuilder<TSourceType, TReturnType> ResolveScopedAsync<TSourceType, TReturnType>(this FieldBuilder<TSourceType, TReturnType> builder, Func<IResolveFieldContext<TSourceType>, Task<TReturnType>> resolver)
-            => builder.Resolve(new ScopedAsyncFieldResolver<TSourceType, TReturnType>(resolver));
+        // Wrap the stream resolver, if any, to create a scope for subscriptions
+        if (builder.FieldType.StreamResolver != null)
+        {
+            builder.FieldType.StreamResolver = new DynamicScopedSourceStreamResolver(builder.FieldType.StreamResolver);
+        }
 
-        /// <summary>
-        /// Creates a resolve builder for the field.
-        /// </summary>
-        public static ResolverBuilder<TSourceType, TReturnType> Resolve<TSourceType, TReturnType>(this FieldBuilder<TSourceType, TReturnType> builder)
-            => new ResolverBuilder<TSourceType, TReturnType>(builder, false);
+        return builder;
     }
+
+    /// <summary>
+    /// Sets the resolver for the field. A dependency injection scope is created for the duration of the resolver's execution
+    /// and the scoped service provider is passed within <see cref="IResolveFieldContext.RequestServices"/>.
+    /// </summary>
+    [AllowedOn<IObjectGraphType>]
+    public static FieldBuilder<TSourceType, TReturnType> ResolveScoped<TSourceType, TReturnType>(this FieldBuilder<TSourceType, TReturnType> builder, Func<IResolveFieldContext<TSourceType>, TReturnType?> resolver)
+        => builder.Resolve(resolver).Scoped();
+
+    /// <inheritdoc cref="ResolveScoped{TSourceType, TReturnType}(FieldBuilder{TSourceType, TReturnType}, Func{IResolveFieldContext{TSourceType}, TReturnType})"/>
+    [AllowedOn<IObjectGraphType>]
+    public static FieldBuilder<TSourceType, TReturnType> ResolveScopedAsync<TSourceType, TReturnType>(this FieldBuilder<TSourceType, TReturnType> builder, Func<IResolveFieldContext<TSourceType>, Task<TReturnType?>> resolver)
+        => builder.ResolveAsync(resolver).Scoped();
+
+    /// <summary>
+    /// Creates a resolve builder for the field.
+    /// </summary>
+    [AllowedOn<IObjectGraphType>]
+    public static ResolverBuilder<TSourceType, TReturnType> Resolve<TSourceType, TReturnType>(this FieldBuilder<TSourceType, TReturnType> builder)
+        => new(builder, false);
+
+    /// <summary>
+    /// Indicates that the resolver for this field will be returning a data loader.
+    /// </summary>
+    internal static FieldBuilder<TSourceType, IDataLoaderResult<TReturnType>> ReturnsDataLoader<TSourceType, TReturnType>(this FieldBuilder<TSourceType, TReturnType> builder)
+        => builder.Returns<IDataLoaderResult<TReturnType>>();
 }

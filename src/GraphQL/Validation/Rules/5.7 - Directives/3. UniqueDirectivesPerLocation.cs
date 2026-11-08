@@ -1,64 +1,73 @@
-using System.Threading.Tasks;
-using GraphQL.Language.AST;
 using GraphQL.Validation.Errors;
+using GraphQLParser;
+using GraphQLParser.AST;
 
-namespace GraphQL.Validation.Rules
+namespace GraphQL.Validation.Rules;
+
+/// <summary>
+/// Unique directive names per location:
+///
+/// A GraphQL document is only valid if all not repeatable directives
+/// at a given location are uniquely named.
+/// </summary>
+public class UniqueDirectivesPerLocation : ValidationRuleBase
 {
     /// <summary>
-    /// Unique directive names per location:
-    ///
-    /// A GraphQL document is only valid if all not repeatable directives
-    /// at a given location are uniquely named.
+    /// Returns a static instance of this validation rule.
     /// </summary>
-    public class UniqueDirectivesPerLocation : IValidationRule
+#pragma warning disable CS0618 // Type or member is obsolete
+    public static readonly UniqueDirectivesPerLocation Instance = new();
+#pragma warning restore CS0618 // Type or member is obsolete
+
+    /// <inheritdoc cref="UniqueDirectivesPerLocation"/>
+    [Obsolete("Please use the Instance property to retrieve a static instance. This constructor will be removed in v9.")]
+    public UniqueDirectivesPerLocation()
     {
-        /// <summary>
-        /// Returns a static instance of this validation rule.
-        /// </summary>
-        public static readonly UniqueDirectivesPerLocation Instance = new UniqueDirectivesPerLocation();
+    }
 
-        /// <inheritdoc/>
-        /// <exception cref="UniqueDirectivesPerLocationError"/>
-        public Task<INodeVisitor> ValidateAsync(ValidationContext context) => _nodeVisitor;
+    /// <inheritdoc/>
+    /// <exception cref="UniqueDirectivesPerLocationError"/>
+    public override ValueTask<INodeVisitor?> GetPreNodeVisitorAsync(ValidationContext context) => new(_nodeVisitor);
 
-        private static readonly Task<INodeVisitor> _nodeVisitor = new NodeVisitors(
-            new MatchingNodeVisitor<Operation>((f, context) => CheckDuplicates(context, f.Directives)),
+    private static readonly INodeVisitor _nodeVisitor = new NodeVisitors(
+        new MatchingNodeVisitor<GraphQLOperationDefinition>((f, context) => CheckDuplicates(context, f.Directives)),
 
-            new MatchingNodeVisitor<Field>((f, context) => CheckDuplicates(context, f.Directives)),
+        new MatchingNodeVisitor<GraphQLField>((f, context) => CheckDuplicates(context, f.Directives)),
 
-            new MatchingNodeVisitor<FragmentDefinition>((f, context) => CheckDuplicates(context, f.Directives)),
+        new MatchingNodeVisitor<GraphQLFragmentDefinition>((f, context) => CheckDuplicates(context, f.Directives)),
 
-            new MatchingNodeVisitor<FragmentSpread>((f, context) => CheckDuplicates(context, f.Directives)),
+        new MatchingNodeVisitor<GraphQLFragmentSpread>((f, context) => CheckDuplicates(context, f.Directives)),
 
-            new MatchingNodeVisitor<InlineFragment>((f, context) => CheckDuplicates(context, f.Directives))
-        ).ToTask();
+        new MatchingNodeVisitor<GraphQLInlineFragment>((f, context) => CheckDuplicates(context, f.Directives)),
 
-        private static void CheckDuplicates(ValidationContext context, Directives directives)
+        new MatchingNodeVisitor<GraphQLVariableDefinition>((f, context) => CheckDuplicates(context, f.Directives))
+    );
+
+    private static void CheckDuplicates(ValidationContext context, GraphQLDirectives? directives)
+    {
+        if (directives?.Count > 0)
         {
-            if (directives?.Count > 0)
+            foreach (var directive in directives)
             {
-                foreach (var directive in directives)
+                var directiveDef = context.Schema.Directives.Find(directive.Name);
+                if (directiveDef != null && !directiveDef.Repeatable && GetCount(directives, directive.Name) > 1)
                 {
-                    var directiveDef = context.Schema.Directives.Find(directive.Name);
-                    if (directiveDef != null && !directiveDef.Repeatable && GetCount(directives, directive.Name) > 1)
-                    {
-                        context.ReportError(new UniqueDirectivesPerLocationError(context, directive));
-                    }
+                    context.ReportError(new UniqueDirectivesPerLocationError(context, directive));
                 }
             }
         }
+    }
 
-        private static int GetCount(Directives directives, string name)
+    private static int GetCount(GraphQLDirectives directives, ROM name)
+    {
+        int count = 0;
+
+        foreach (var directive in directives)
         {
-            int count = 0;
-
-            foreach (var directive in directives)
-            {
-                if (directive.Name == name)
-                    ++count;
-            }
-
-            return count;
+            if (directive.Name == name)
+                ++count;
         }
+
+        return count;
     }
 }

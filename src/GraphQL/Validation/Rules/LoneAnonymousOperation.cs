@@ -1,32 +1,39 @@
-using System.Threading.Tasks;
-using GraphQL.Language.AST;
 using GraphQL.Validation.Errors;
+using GraphQLParser;
+using GraphQLParser.AST;
 
-namespace GraphQL.Validation.Rules
+namespace GraphQL.Validation.Rules;
+
+/// <summary>
+/// Lone anonymous operation:
+///
+/// A GraphQL document is only valid if when it contains an anonymous operation
+/// (the query short-hand) that it contains only that one operation definition.
+/// </summary>
+public class LoneAnonymousOperation : ValidationRuleBase
 {
     /// <summary>
-    /// Lone anonymous operation:
-    ///
-    /// A GraphQL document is only valid if when it contains an anonymous operation
-    /// (the query short-hand) that it contains only that one operation definition.
+    /// Returns a static instance of this validation rule.
     /// </summary>
-    public class LoneAnonymousOperation : IValidationRule
+#pragma warning disable CS0618 // Type or member is obsolete
+    public static readonly LoneAnonymousOperation Instance = new();
+#pragma warning restore CS0618 // Type or member is obsolete
+
+    /// <inheritdoc cref="LoneAnonymousOperation"/>
+    [Obsolete("Please use the Instance property to retrieve a static instance. This constructor will be removed in v9.")]
+    public LoneAnonymousOperation()
     {
-        /// <summary>
-        /// Returns a static instance of this validation rule.
-        /// </summary>
-        public static readonly LoneAnonymousOperation Instance = new LoneAnonymousOperation();
-
-        /// <inheritdoc/>
-        /// <exception cref="LoneAnonymousOperationError"/>
-        public Task<INodeVisitor> ValidateAsync(ValidationContext context) => _nodeVisitor;
-
-        private static readonly Task<INodeVisitor> _nodeVisitor = new MatchingNodeVisitor<Operation>((op, context) =>
-        {
-            if (string.IsNullOrWhiteSpace(op.Name) && context.Document.Operations.Count > 1)
-            {
-                context.ReportError(new LoneAnonymousOperationError(context, op));
-            }
-        }).ToTask();
     }
+
+    /// <inheritdoc/>
+    /// <exception cref="LoneAnonymousOperationError"/>
+    public override ValueTask<INodeVisitor?> GetPreNodeVisitorAsync(ValidationContext context) => new(_nodeVisitor);
+
+    private static readonly INodeVisitor _nodeVisitor = new MatchingNodeVisitor<GraphQLOperationDefinition>((op, context) =>
+    {
+        if (op.Name is null && context.Document.OperationsCount() > 1)
+        {
+            context.ReportError(new LoneAnonymousOperationError(context, op));
+        }
+    });
 }

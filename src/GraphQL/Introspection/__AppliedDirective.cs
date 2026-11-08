@@ -1,30 +1,29 @@
-using System.Linq;
 using GraphQL.Types;
 
-namespace GraphQL.Introspection
+namespace GraphQL.Introspection;
+
+/// <summary>
+/// The <see cref="__AppliedDirective"/> introspection type represents
+/// a directive applied to a schema element - type, field, argument, etc.
+/// </summary>
+public class __AppliedDirective : ObjectGraphType<AppliedDirective>
 {
     /// <summary>
-    /// The <c>__AppliedDirective</c> introspection type represents a directive applied to a schema element - type, field, argument, etc.
+    /// Initializes a new instance of this graph type.
     /// </summary>
-    public class __AppliedDirective : ObjectGraphType<AppliedDirective>
+    public __AppliedDirective()
     {
-        /// <summary>
-        /// Initializes a new instance of this graph type.
-        /// </summary>
-        public __AppliedDirective()
-        {
-            Description =
-                "Directive applied to a schema element";
+        SetName(nameof(__AppliedDirective), validate: false);
 
-            Field<NonNullGraphType<StringGraphType>>(
-                "name",
-                "Directive name",
-                resolve: context => context.Source.Name);
+        Description =
+            "Directive applied to a schema element";
 
-            Field<NonNullGraphType<ListGraphType<NonNullGraphType<__DirectiveArgument>>>>(
-                "args",
-                "Values of explicitly specified directive arguments",
-                resolve: context => context.Source.List ?? Enumerable.Empty<DirectiveArgument>());
-        }
+        Field<NonNullGraphType<StringGraphType>>("name")
+            .Description("Directive name")
+            .ResolveNoAccessor(context => context.Source!.Name);
+
+        Field<NonNullGraphType<ListGraphType<NonNullGraphType<__DirectiveArgument>>>>("args")
+            .Description("Values of explicitly specified directive arguments")
+            .ResolveNoAccessor(context => context.Source!.List ?? Enumerable.Empty<DirectiveArgument>());
     }
 }
